@@ -1,0 +1,254 @@
+# iaSimulationStory
+
+Layered-memory narrative simulator: a single **state authority**, **two-pass** turns (resolve → render), and setting packs separated from the engine.
+
+---
+
+## Quick start
+
+### Backend
+
+```powershell
+cd backend
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+pip install -r requirements.txt
+copy ..\.env.example ..\.env
+# Fill API keys in .env (see Configuration)
+uvicorn app.main:app --reload --app-dir .
+```
+
+### Frontend
+
+```powershell
+cd frontend
+npm install
+npm run dev
+```
+
+- UI: http://localhost:5173  
+- API: http://127.0.0.1:8000  
+
+On a phone (same Wi‑Fi), from the repo root:
+
+```powershell
+.\start.ps1
+```
+
+or `start.cmd`. Open `http://<PC-IP>:5173` (Vite proxies `/api` in dev).
+
+### Wiki seed (local)
+
+Setting wiki content is built locally from sources:
+
+```powershell
+copy sources.example.yaml sources.yaml
+# edit sources.yaml with real URLs
+cd backend
+python scripts/fetch_sources.py
+python scripts/ingest.py
+```
+
+Per story pack, also copy meta if needed:
+
+```powershell
+copy stories\overlord\meta.example.yaml stories\overlord\meta.yaml
+# edit start_location, default_front, playable_characters, …
+```
+
+`wiki/` under each story pack is local (not in git). Build sheets via ingest from `sources.yaml`; keep fronts/overlays/index with your private seed.
+
+---
+
+## Setting packs
+
+- **Engine** (`backend/prompts/`): generic turn, review, and structural ingest rules.
+- **Pack** (`stories/<id>/`): local `meta.yaml` (from `meta.example.yaml`), local `wiki/` seed (fronts, sheets, overlays), optional `prompts/ingest.md`.
+- Base sheets = invariants; overlays `wiki/overlays/<arc_id>/` = era titles / goals / knowledge.
+- At runtime `WikiQuery` merges base + active overlays (combat/magic sections in overlays are ignored).
+- A new setting ≈ a new pack, without rewriting engine prompts.
+
+Ingest (`--force`, `--only`, `--limit` on `ingest.py`) writes only to the seed, runs linkify at the end, and each new session clones the seed into `saves/<id>/wiki/`.
+
+---
+
+## API
+
+| Method | Path | Purpose |
+|--------|------|---------|
+| GET | `/api/config` | Review intervals / UI config |
+| GET | `/api/stories` | Available stories |
+| GET | `/api/saves`, `/api/saves/active` | Sessions |
+| POST | `/api/session` | New game (`story_id`, `player_name`) |
+| GET | `/api/session/{id}` | State + chat |
+| GET | `/api/session/{id}/sheet` | Player sheet |
+| GET | `/api/session/{id}/spellbook` | Spellbook |
+| GET | `/api/session/{id}/arc-timeline` | Arc timeline |
+| POST | `/api/chat` | Player action |
+| POST | `/api/end-scene` | Session wiki consolidation |
+| GET | `/api/state/{id}`, `/api/chat/{id}` | State / full chat |
+
+Without LLM keys the backend can answer with mock text for smoke tests.
+
+### Configuration (`.env`)
+
+See `.env.example`:
+
+- `OPENAI_API_KEY`, `LLM_API_BASE_URL` — review / ingest  
+- `OPENROUTER_API_KEY` — narrative when the model slug is `provider/model`  
+- `GEMINI_API_KEY` — when the model name starts with `gemini`  
+- `LLM_MODEL_NARRATIVE` / `RESOLVE` / `RENDER` / `REVIEW` / `INGEST`  
+- `PRESENT_REVIEW_EVERY_N`, `CONSOLIDATE_EVERY_N`  
+- budget: `NARRATIVE_TOKEN_BUDGET`, `NARRATIVE_CHAT_MESSAGES`, `WIKI_PAGE_CAP`, `WORLD_EXCERPT_CHARS`, `LLM_MAX_OUTPUT_TOKENS`, `NARRATIVE_MAX_WORDS`  
+
+Empty `RESOLVE` / `RENDER` fall back to `LLM_MODEL_NARRATIVE`. Full defaults live in `backend/app/config.py` (`0` disables the related limit).
+
+---
+
+## Architecture
+
+### Components
+
+```mermaid
+flowchart LR
+  API[routes / chat] --> Pipeline[TurnPipeline]
+  Pipeline --> Assembler[NarrativeContextAssembler]
+  Pipeline --> Resolver[TurnResolver]
+  Pipeline --> Presence[presence.normalize]
+  Pipeline --> Reducer[state_reducer]
+  Pipeline --> Fronts[FrontEngine.resolve_tick]
+  Pipeline --> Renderer[NarrativeRenderer]
+  Pipeline --> Persist[turn_persistence.commit_turn]
+  Pipeline --> Reviews[ConsequenceEngine]
+  Assembler --> WikiQ[WikiQuery]
+  Assembler --> Saves[SaveManager]
+  Fronts --> Outcome[FrontOutcome]
+  Outcome --> Reducer
+  Persist --> Saves
+  Persist --> WikiW[WikiWriter]
+  Reviews --> Reducer
+  Reviews --> Fronts
+```
+
+### Turn sequence (two-pass)
+
+```mermaid
+sequenceDiagram
+  participant U as Player
+  participant P as TurnPipeline
+  participant A as Assembler
+  participant R1 as TurnResolver
+  participant F as FrontEngine
+  participant R2 as NarrativeRenderer
+  participant S as commit_turn
+
+  U->>P: message
+  P->>A: build_request(state, message)
+  A-->>P: NarrativeRequest
+  P->>R1: resolve(request)
+  R1-->>P: TurnResolution (no text)
+  P->>P: normalize present + collect spells
+  P->>P: apply_scene_delta(resolution)
+  P->>F: resolve_tick + apply_front_outcome
+  F-->>P: FrontOutcome (wiki_patches deferred)
+  P->>A: build_render_cards (post-clock)
+  P->>R2: render(NarrativeRenderRequest)
+  R2-->>P: text
+  P->>P: de-dup vs last reply
+  P->>S: commit_turn (spells, wiki, chat x2, atomic save)
+  P->>P: run_scheduled_reviews
+```
+
+Turn stance: `action` | `passive` | `wait`.
+
+- `passive` — small observable delta  
+- `wait` — advances plausible time until a beat, without forcing the next beat  
+- explicit dialogue → always `action`
+
+### Memory (4 layers)
+
+```mermaid
+flowchart TB
+  subgraph L1 [1. Short — chat.jsonl]
+    Chat[Turn messages]
+  end
+  subgraph L2 [2. Present — game_state]
+    Scene[location / present / situations / clock / fronts]
+  end
+  subgraph L3 [3. Mid — present review]
+    PR[conversation → delta → game_state]
+  end
+  subgraph L4 [4. Long — session wiki]
+    Cons[consolidation → sheets / spellbook / places]
+    Seed[stories/*/wiki seed immutable at runtime]
+  end
+  Chat --> Scene
+  Scene --> PR
+  PR --> Scene
+  Scene --> Cons
+  Seed -.clone.-> Cons
+```
+
+| Layer | Path | Writer | Lifecycle | Belongs here | Does not belong |
+|-------|------|--------|-----------|--------------|-----------------|
+| Canon seed | `stories/<story_id>/wiki/` | Ingest/CLI only | Cloned into new games; never mutated at runtime | Canon, front YAML, index | Session memories / open threads |
+| Session wiki | `saves/<session_id>/wiki/` | Consolidation + beat `wiki_writes` + spellbook | Private per adventure | Dense memories, open threads, place events/tensions, spellbook | Micro-actions, momentary tone, raw transcript |
+| Mid state | `saves/<session_id>/game_state.json` | TurnPipeline + present review | Every turn (atomic save) | location, present, situations, clock, fronts, mood/relationships | Long canon, undued future beats |
+| Short chat | `saves/<session_id>/chat.jsonl` | `commit_turn` | Append per exchange | Turn prose + player actions | Wiki patches, internal counters |
+
+**Promotion:** chat → present review → situations/runtime → consolidation → session wiki.  
+**Removal:** present review drops stale situations; consolidation may `state_cleanup` after promotion.
+
+### Context budget
+
+```mermaid
+flowchart LR
+  Core[canon_facts + player_action + arc] --> Cards[character_cards]
+  Cards --> ChatRecent[chat_recent newest-first]
+  ChatRecent --> World[world_pages]
+  World --> Spells[spellbook]
+  Spells --> Fit[NarrativeBudgetPolicy.trim]
+```
+
+`NarrativeBudgetPolicy` trims by priority up to `narrative_token_budget` (`0` = off): core → NPC cards → recent chat (newest first) → world → spellbook → arc trim.
+
+---
+
+## Turn context contract
+
+**Always:** `player_action`, `canon_facts` (place, time, present, situations…), `stance`, recent chat; front slice (`active_arc`) only in Pass 1.
+
+**Selective:** on-scene NPC cards, relevant world pages, spellbook, `fired_beat_summaries` / `interrupt_hint` only in Pass 2 when already fired.
+
+**Excluded:** future beats in the renderer, knowledge outside NPC scopes, wiki beyond `wiki_page_cap`.
+
+### Pass 1 — Resolver (`turn_resolve.md`)
+
+Input: `NarrativeRequest`.  
+Output: `TurnResolution` (no prose):
+
+- `time` `{bucket, minutes}`
+- `location` | null  
+- `present` | null | []  
+- `spells[]`  
+- `scene_brief[]`  
+- `situations_add[]` / `situations_remove[]`
+
+### Pass 2 — Renderer (`narrative_render.md`)
+
+Input: `NarrativeRenderRequest` with **post-clock** `canon_facts`, `scene_brief`, `temporal_context`, cards/chat/spellbook, already-materialized hints — **not** the upcoming arc.  
+Output: `{ "text": "..." }`.
+
+`narrative.md` is legacy single-pass only (unused by the pipeline).
+
+---
+
+## Invariants
+
+- Scene mutations only via `apply_scene_delta` / `apply_front_outcome` (`state_reducer`).
+- Front impacts applied by `FrontEngine.apply_impacts` (not the reducer).
+- `resolve_tick` mutates front runtime only; scene + wiki patches live in `FrontOutcome`.
+- One atomic `save_game_state` per turn in `commit_turn`; scheduled reviews persist their own deltas afterward.
+- Stable `ChatResponse` toward the frontend.
+- Consolidation does not write chat; it may `state_cleanup` situations after wiki promotion.
+- Each adventure clones the seed: actions never contaminate other saves or the seed.

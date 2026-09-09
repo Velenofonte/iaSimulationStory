@@ -1,0 +1,21 @@
+.env
+.venv/
+__pycache__/
+*.pyc
+node_modules/
+dist/
+sources.yaml
+.DS_Store
+.cursor/
+
+# Keep empty dirs in git; ignore their contents
+raw/**
+!raw/.gitkeep
+saves/**
+!saves/.gitkeep
+
+# Entire setting wiki seed (sheets, fronts, index, overlays, spellbooks…) — local only.
+# Pack config that stays in git: stories/*/prompts/, stories/*/meta.example.yaml
+stories/*/wiki/**
+!stories/*/wiki/.gitkeep
+stories/*/meta.yaml

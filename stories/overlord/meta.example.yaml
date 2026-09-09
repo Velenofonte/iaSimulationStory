@@ -1,0 +1,22 @@
+# Copy to meta.yaml in this folder:
+#   copy meta.example.yaml meta.yaml
+#
+# Pack identity and bootstrap for stories/<id>/ (not wiki lore).
+
+id: example-story
+name: Example Story
+description: Short description shown in the story list.
+start_location: starting-town
+default_front: main_arc
+genre: genre / tone blurb for the turn LLM (story_context)
+narrative_style: >
+  Second-person immersive narration. Add setting-specific rules the resolve/render
+  prompts should respect (titles valid in-era, no invented game mechanics, etc.).
+playable_characters:
+  - hero
+  - companion
+races:
+  - id: human
+    name: Human
+  - id: elf
+    name: Elf

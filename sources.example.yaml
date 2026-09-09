@@ -1,0 +1,35 @@
+# Copia questo file in sources.yaml e adatta URL / out.
+#   copy sources.example.yaml sources.yaml
+#
+# Formato: sezioni hub | world | nations | locations | factions | characters
+# Ogni voce: name, url (pagina sorgente), out (path relativo sotto stories/<id>/wiki/)
+
+hub:
+  - name: example-hub
+    url: https://example.com/wiki/Main_Page
+    out: world/example-hub.md
+
+world:
+  - name: example-world
+    url: https://example.com/wiki/World
+    out: world/example-world.md
+
+nations:
+  - name: example-nation
+    url: https://example.com/wiki/Nation
+    out: nations/example-nation.md
+
+locations:
+  - name: example-location
+    url: https://example.com/wiki/Location
+    out: locations/example-location.md
+
+factions:
+  - name: example-faction
+    url: https://example.com/wiki/Faction
+    out: factions/example-faction.md
+
+characters:
+  - name: example-character
+    url: https://example.com/wiki/Character
+    out: characters/example-character.md
