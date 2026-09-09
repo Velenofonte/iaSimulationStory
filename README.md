@@ -2,6 +2,8 @@
 
 Layered-memory narrative simulator: a single **state authority**, **two-pass** turns (resolve → render), and setting packs separated from the engine.
 
+**Copyright (c) 2026 Davide Tarquini** — released under the [MIT License](LICENSE). You may use, modify, and redistribute this project (including the architecture and ideas) freely, provided the copyright and license notice are preserved.
+
 ---
 
 ## Quick start
@@ -216,30 +218,82 @@ flowchart LR
 
 ## Turn context contract
 
-**Always:** `player_action`, `canon_facts` (place, time, present, situations…), `stance`, recent chat; front slice (`active_arc`) only in Pass 1.
+The turn is **two-pass**. Pass 1 decides *what happened* as structured facts (no prose). Pass 2 turns those facts into player-facing text. Clock, location, and presence are applied **between** the passes, so the renderer always sees **post-clock** canon.
 
-**Selective:** on-scene NPC cards, relevant world pages, spellbook, `fired_beat_summaries` / `interrupt_hint` only in Pass 2 when already fired.
+### What goes into the LLM
 
-**Excluded:** future beats in the renderer, knowledge outside NPC scopes, wiki beyond `wiki_page_cap`.
+| Kind | Fields | Notes |
+|------|--------|--------|
+| **Always** | `player_action`, `canon_facts`, `stance`, `chat_recent`, `story_context` | Core continuity |
+| **Pass 1 only** | `active_arc` | Current front slice (beats / era). Empty if no active front |
+| **Selective** | `character_cards`, `world_pages`, `spellbook` | On-scene NPCs; place/mention pages; known spells |
+| **Pass 2 only** | `scene_brief`, `temporal_context`, `fired_beat_summaries`, `interrupt_hint` | After resolve + front tick |
+| **Never (renderer)** | Upcoming beats / future `active_arc` | Avoids spoilers and railroading |
+
+**`canon_facts`** (absolute for both passes; Pass 2 sees them after clock/location/present updates):
+
+- `location` — current place id  
+- `time` — label (`Giorno N · fase`)  
+- `present` — NPCs physically with the PC  
+- `situations` — mid-term open threads (serialized with an epistemic note: continuity for the *model*, not automatic NPC knowledge)  
+- `extra` — free-form structured flags  
+
+**`story_context`** — genre + narrative style from the pack `meta.yaml`.  
+**`stance`** — `action` | `passive` | `wait` (classified from the player message).
+
+### Player-action grammar (both passes)
+
+Markers are interpreted in **literal order** (do not reorder):
+
+| Marker | Meaning |
+|--------|---------|
+| `"..."` / `«...»` | Spoken dialogue |
+| `[Name — desc]` / `[Name]` | Spell cast (new spell → `spells[]`; bare name → do not invent a description) |
+| `*...*` | Private thought (NPCs do not hear it) |
+| Free text | Physical / scene action |
 
 ### Pass 1 — Resolver (`turn_resolve.md`)
 
-Input: `NarrativeRequest`.  
-Output: `TurnResolution` (no prose):
+**Input:** `NarrativeRequest`  
+`canon_facts`, `active_arc`, `world_pages`, `character_cards`, `spellbook`, `chat_recent`, `player_action`, `stance`, `story_context`
 
-- `time` `{bucket, minutes}`
-- `location` | null  
-- `present` | null | []  
-- `spells[]`  
-- `scene_brief[]`  
-- `situations_add[]` / `situations_remove[]`
+**Output:** `TurnResolution` — **no `text` field**:
+
+| Field | Meaning |
+|-------|---------|
+| `time` | `{ bucket, minutes }` — clock advance (`istantanea` / `breve` / `media` / `lunga` / `riposo`) |
+| `location` | New place id if the PC moved; else `null` |
+| `present` | Full replacement list of who is with the PC; `null` = unchanged; `[]` = alone |
+| `spells[]` | Newly declared `[Name — desc]` only |
+| `scene_brief[]` | 1–4 **fact bullets** for the renderer (deltas, not prose) |
+| `situations_add[]` / `situations_remove[]` | Mid-term threads to open/close (`remove` must match existing strings) |
+
+Stance shapes the brief: `passive` / `wait` keep deltas small; explicit dialogue stays `action`.
+
+After Pass 1 the pipeline: normalizes presence → applies scene delta → runs `FrontEngine.resolve_tick` → then rebuilds cards for Pass 2 with updated clock/place.
 
 ### Pass 2 — Renderer (`narrative_render.md`)
 
-Input: `NarrativeRenderRequest` with **post-clock** `canon_facts`, `scene_brief`, `temporal_context`, cards/chat/spellbook, already-materialized hints — **not** the upcoming arc.  
-Output: `{ "text": "..." }`.
+**Input:** `NarrativeRenderRequest`
 
-`narrative.md` is legacy single-pass only (unused by the pipeline).
+| Field | Role |
+|-------|------|
+| `canon_facts` | **Post-clock** canon (must not be contradicted) |
+| `player_action`, `stance` | Same markers as Pass 1 |
+| `scene_brief` | Structural facts from the resolver (integrate once; do not paste as an outline) |
+| `temporal_context` | Era constraints (titles / public knowledge); overrides future biography on cards |
+| `story_context` | Pack tone/genre |
+| `interrupt_hint`, `fired_beat_summaries` | Front events **already** materialized this turn |
+| `character_cards`, `chat_recent`, `spellbook` | Voice, continuity, known magic |
+| `world_pages` | Usually only when casting (e.g. magic tier / scale) |
+
+Does **not** receive future arc / upcoming beats.
+
+**Output:** `NarrativeRenderResult` — `{ "text": "..." }` Italian second-person prose for the player.
+
+Rules of thumb: one scene beat; honor player markers in order; do not rehash what `chat_recent` / `canon_facts` already established; use `scene_brief` and fired beats as content constraints, not copy-paste.
+
+`narrative.md` is legacy single-pass only (unused by the live pipeline).
 
 ---
 
@@ -252,3 +306,11 @@ Output: `{ "text": "..." }`.
 - Stable `ChatResponse` toward the frontend.
 - Consolidation does not write chat; it may `state_cleanup` situations after wiki promotion.
 - Each adventure clones the seed: actions never contaminate other saves or the seed.
+
+---
+
+## License
+
+Copyright (c) 2026 Davide Tarquini.
+
+This project is licensed under the MIT License — see [LICENSE](LICENSE) for the full text.
