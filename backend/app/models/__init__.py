@@ -5,12 +5,17 @@ from app.models.game_state import (
     ArcTimelineFront,
     ArcTimelineResponse,
     CharacterRuntime,
+    DeedRecord,
+    EpisodeRuntime,
     FrontRuntime,
     GameState,
     LocationRuntime,
+    NotorietyRuntime,
+    NpcKnowledgeFact,
+    OffscreenCharacter,
     PlayerState,
 )
-from app.models.narrative import NarrativeReply, NarrativeRequest
+from app.models.narrative import Episode, NarrativeReply, NarrativeRequest
 from app.models.reviews import ConsolidationReviewResult, EntityCreate, PresentReviewResult
 from app.models.turn import (
     CompletedTurn,
@@ -30,7 +35,10 @@ __all__ = [
     "ChatMessage",
     "CompletedTurn",
     "ConsolidationReviewResult",
+    "DeedRecord",
     "EntityCreate",
+    "Episode",
+    "EpisodeRuntime",
     "FrontOutcome",
     "FrontRuntime",
     "GameState",
@@ -39,6 +47,9 @@ __all__ = [
     "NarrativeRenderResult",
     "NarrativeReply",
     "NarrativeRequest",
+    "NotorietyRuntime",
+    "NpcKnowledgeFact",
+    "OffscreenCharacter",
     "PlayerState",
     "PresentReviewResult",
     "SceneStateDelta",

@@ -84,7 +84,10 @@ def apply_narration_to_state(state: GameState, narr_result: NarrativeReply) -> N
         present=narr_result.present,
         spells=list(narr_result.spells),
     )
-    apply_scene_delta(state, resolution_to_delta(resolution))
+    apply_scene_delta(
+        state,
+        resolution_to_delta(resolution, previous_location=state.player.location),
+    )
 
 
 def advance_clock_respecting_fronts(

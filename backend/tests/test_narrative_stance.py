@@ -185,7 +185,10 @@ def test_pipeline_wait_uses_narrative_duration_without_jumping_to_front_beat(
 
     assert result.state.minutes == start_minutes + 2
     assert elapsed == [2]
-    assert "Il fianco della formazione di Gazef sta cedendo." in result.state.situations
+    assert any(
+        s.summary == "Il fianco della formazione di Gazef sta cedendo."
+        for s in result.state.situations
+    )
     render_payload = json.loads(fake_llm["calls"][-1]["user"])
     assert render_payload["stance"] == "wait"
     assert render_payload["fired_beat_summaries"] == []

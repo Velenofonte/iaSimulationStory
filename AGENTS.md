@@ -6,7 +6,8 @@
 - `stories/<story_id>/wiki/fronts/` archi narrativi (YAML beat) **specifici dell'ambientazione**
 - `stories/<story_id>/wiki/overlays/<arc_id>/` titoli/epoca legati all'arco
 - `stories/<story_id>/meta.yaml` meta storia (`genre`, `narrative_style`, start, default_front)
-- `stories/<story_id>/prompts/` regole ingest/tono opzionali del pack (non nel motore generico)
+- `stories/<story_id>/prompts/` regole ingest/tono/episodi opzionali del pack (non nel motore generico)
+- `stories/<story_id>/events.yaml` pesi e bande del motore episodi/notorieta (pack ambientazione)
 - `saves/<session_id>/wiki/` clone privato della partita (schede, world, spellbook)
 - `saves/<session_id>/` stato partita + chat (non toccare con ingest)
 
@@ -43,8 +44,9 @@ Ordine sezioni:
 10. Knowledge scope (sa / non sa)
 11. Relazione col giocatore (`0` in seed)
 12. Memorie / Open threads — **sempre vuote in seed** (runtime sessione)
+13. Notorieta — **sempre vuota in seed** (runtime sessione: etichette, portata, imprese note al mondo)
 
-**NON** sulla base: Piani attuali, titoli/stato politico d'epoca, Open threads pieni.
+**NON** sulla base: Piani attuali, titoli/stato politico d'epoca, Open threads pieni, Notorieta piena.
 **NON** nestare heading: vietato `## Skill / build` dentro Capacita — usare `# Skill / build YGGDRASIL` o bullet.
 
 Magie dettagliate → `wiki/spellbooks/<id>.md` (non lista completa sulla scheda).

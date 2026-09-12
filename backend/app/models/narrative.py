@@ -2,6 +2,8 @@ from typing import Any
 
 from pydantic import BaseModel, Field, field_validator, model_serializer
 
+from app.models.game_state import NpcKnowledgeFact, coerce_fact_list
+
 
 def split_spell_line(line: str) -> tuple[str, str]:
     """Split 'Name — desc' tolerating em/en/hyphen dashes."""
@@ -19,8 +21,9 @@ def split_spell_line(line: str) -> tuple[str, str]:
 
 
 SITUATIONS_EPISTEMIC_NOTE = (
-    "contesto di continuita' per TE — un NPC li conosce solo se rientra "
-    "nelle condizioni 1-3 di Coerenza, non automaticamente"
+    "NARRATOR_ONLY: continuita' per TE, non conoscenza NPC. "
+    "Usa un fatto solo se e' sulla lente dell'NPC "
+    "(Sa / Relazione / knowledge) o detto in presenza / su documento"
 )
 
 class NarrativeTime(BaseModel):
@@ -131,12 +134,28 @@ class NarrativeCanonFacts(BaseModel):
     location: str
     time: str
     present: list[str] = Field(default_factory=list)
-    situations: list[str] = Field(default_factory=list)
+    offscreen: list[str] = Field(
+        default_factory=list,
+        description="NPC fuori scena ma richiamabili: 'id — where: reason'",
+    )
+    situations: list[NpcKnowledgeFact] = Field(default_factory=list)
+    known_ids: dict[str, Any] = Field(
+        default_factory=dict,
+        description=(
+            "Registro id riusabili: situations [{id,summary}] + "
+            "npc_knowledge {npc_id: [{id,summary}]}"
+        ),
+    )
     extra: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("situations", mode="before")
+    @classmethod
+    def _coerce_situations(cls, v: Any) -> list[NpcKnowledgeFact]:
+        return coerce_fact_list(v)
 
     @model_serializer(mode="wrap")
     def _serialize_with_situations_note(self, serializer):
-        """Wrap situations for LLM dumps: note + items (Python API stays list[str])."""
+        """Wrap situations for LLM dumps: note + {id, summary} items."""
         data = serializer(self)
         items = list(data.get("situations") or [])
         data["situations"] = {
@@ -149,6 +168,22 @@ class NarrativeCanonFacts(BaseModel):
 class NarrativeSpellEntry(BaseModel):
     name: str
     description: str = ""
+
+
+class Episode(BaseModel):
+    """Ambient episode mandate from the episode director (Pass 1 + Pass 2)."""
+
+    tier: int = 0
+    tier_label: str = ""
+    kind: str = ""
+    exposure: str = "low"
+    witnesses: list[str] = Field(default_factory=list)
+    no_auto_damage: bool = True
+    must_not_resolve: bool = True
+    opens_thread: bool = Field(
+        default=True,
+        description="True se l'episodio apre un filo da tracciare in situations (tier>=2)",
+    )
 
 
 class NarrativeRequest(BaseModel):
@@ -174,4 +209,24 @@ class NarrativeRequest(BaseModel):
     story_context: str = Field(
         default="",
         description="Genere/tono dalla meta della storia; vuoto se assente",
+    )
+    story_rules: str = Field(
+        default="",
+        description="Regole di setting iniettate (stories/<id>/prompts/episode.md); vuoto se assente",
+    )
+    episode: Episode | None = Field(
+        default=None,
+        description="Mandato episodio ambient; null se nessun evento questo turno",
+    )
+    notoriety_slice: str = Field(
+        default="",
+        description="Slice compatta di notorieta' / etichette / scarto; vuoto se assente",
+    )
+    scale_bands: list[str] = Field(
+        default_factory=list,
+        description="Id bande di scala del mondo dal pack (opachi per il motore)",
+    )
+    thread_hint: str = Field(
+        default="",
+        description="Suggerimento resolver se un filo ripete senza progresso; vuoto se assente",
     )

@@ -9,6 +9,7 @@ from app.api import routes as routes_mod
 from app.config import settings
 from app.main import app
 from app.models import ChatMessage
+from app.models.game_state import NpcKnowledgeFact
 from app.services.save_manager import SaveManager
 from tests.conftest import make_seed_story
 
@@ -32,7 +33,7 @@ def test_undo_checkpoint_roundtrip_restores_state_chat_wiki(tmp_path: Path) -> N
     assert saves.undo_count(sid) == 1
 
     state.player.location = "carne"
-    state.situations.append("poisoned lore")
+    state.situations.append(NpcKnowledgeFact(id="poisoned_lore", summary="poisoned lore"))
     saves.save_game_state(state)
     saves.append_chat(sid, ChatMessage(role="user", content="ranghi?", location="carne"))
     saves.append_chat(

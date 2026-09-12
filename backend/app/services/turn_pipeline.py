@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import re
+
 from app.models import GameState
 from app.models.narrative import NarrativeCanonFacts, NarrativeReply
 from app.models.turn import NarrativeRenderRequest, TurnResolution
@@ -9,6 +11,8 @@ from app.services.chat_turn import (
     collect_spells,
     run_scheduled_reviews,
 )
+from app.services.episode_director import EpisodeDirector
+from app.services.episode_pack import load_episode_pack
 from app.services.front_engine import FrontEngine
 from app.services.game_clock import (
     advance_by_minutes,
@@ -24,13 +28,30 @@ from app.services.narrative_stance import (
     last_assistant_message,
     trim_chat_for_passive_render,
 )
+from app.services.notoriety import apply_deed, decay as decay_notoriety
 from app.services.presence import normalize_presence_list
 from app.services.save_manager import SaveManager
-from app.services.state_reducer import apply_front_outcome, apply_scene_delta, resolution_to_delta
+from app.services.state_reducer import (
+    apply_front_outcome,
+    apply_scene_delta,
+    format_offscreen_lines,
+    resolution_to_delta,
+)
 from app.services.turn_persistence import commit_turn
+from app.services.thread_registry import ensure_exit_threads, ensure_pending_threads
+from app.services.thread_stall import detect_thread_stall
+from app.services.id_registry import build_known_ids, situation_summaries
 from app.services.turn_resolver import TurnResolver
 from app.services.wiki_query import WikiQuery
 from app.services.wiki_writer import WikiWriter
+
+_DIALOGUE_HINT_RE = re.compile(
+    r"(?:"
+    r'[«"].{2,}[»"]'
+    r"|\b(?:dico|chiedo|chiederei)\b"
+    r")",
+    re.IGNORECASE,
+)
 
 
 class TurnPipeline:
@@ -45,6 +66,7 @@ class TurnPipeline:
         query: WikiQuery,
         saves: SaveManager,
         consequences: object | None = None,
+        episodes: EpisodeDirector | None = None,
     ) -> None:
         self.assembler = assembler
         self.resolver = resolver
@@ -54,23 +76,59 @@ class TurnPipeline:
         self.query = query
         self.saves = saves
         self.consequences = consequences
+        self.episodes = episodes or EpisodeDirector()
 
     def run(self, state: GameState, message: str, *, svc: object | None = None) -> ChatTurnResult:
         sid = state.session_id
         self.saves.write_undo_checkpoint(sid)
         try:
             context = self.assembler.build_request(state=state, user_message=message)
+            stance = context.stance or detect_stance(message)
+            director_stance = stance
+            if (
+                stance == "action"
+                and state.characters_active
+                and _DIALOGUE_HINT_RE.search(message or "")
+            ):
+                director_stance = "dialogue"
+
+            location_meta = self.query.read_location_meta(state.player.location)
+            soonest = self.fronts.minutes_to_next_hydratable_beat(state)
+            beat_imminent = soonest is not None and soonest <= 0
+            episode = self.episodes.decide(
+                state,
+                stance=director_stance,
+                location_meta=location_meta,
+                beat_imminent=beat_imminent,
+            )
+            context.episode = episode
+            context.thread_hint = detect_thread_stall(
+                list(context.chat_recent),
+                message,
+                situation_summaries(state),
+            )
+
             resolution = self.resolver.resolve(context)
 
-            if resolution.present is not None:
+            if resolution.present is not None or resolution.present_join:
                 resolution = TurnResolution(
                     time=resolution.time,
                     location=resolution.location,
-                    present=normalize_presence_list(resolution.present, self.query),
+                    present=(
+                        normalize_presence_list(resolution.present, self.query)
+                        if resolution.present is not None
+                        else None
+                    ),
+                    present_join=normalize_presence_list(
+                        list(resolution.present_join), self.query
+                    ),
+                    present_leave=dict(resolution.present_leave),
                     spells=list(resolution.spells),
                     scene_brief=list(resolution.scene_brief),
                     situations_add=list(resolution.situations_add),
                     situations_remove=list(resolution.situations_remove),
+                    npc_knowledge_upsert=dict(resolution.npc_knowledge_upsert),
+                    deed=resolution.deed,
                 )
 
             known = {
@@ -87,9 +145,23 @@ class TurnPipeline:
             )
             spells = collect_spells(message, shim, known)
 
-            apply_scene_delta(state, resolution_to_delta(resolution))
+            prev_location = state.player.location
+            resolution = ensure_pending_threads(resolution, episode, state)
+            resolution = ensure_exit_threads(
+                resolution,
+                player_action=message,
+                previous_location=prev_location,
+                state=state,
+            )
+            apply_scene_delta(
+                state,
+                resolution_to_delta(resolution, previous_location=prev_location),
+            )
 
-            stance = context.stance or detect_stance(message)
+            if resolution.deed is not None:
+                pack = load_episode_pack(state.story_id)
+                apply_deed(state, resolution.deed, pack)
+
             _suffix, front_outcome = self._advance_clock(
                 state,
                 resolution.time.bucket,
@@ -98,20 +170,25 @@ class TurnPipeline:
                 player_action=message,
             )
 
-            if stance in {"passive", "wait"} and len(resolution.scene_brief) > 1:
+            # passive only: wait must keep full brief (openings / turns).
+            if stance == "passive" and len(resolution.scene_brief) > 1:
                 resolution = TurnResolution(
                     time=resolution.time,
                     location=resolution.location,
                     present=resolution.present,
+                    present_join=list(resolution.present_join),
+                    present_leave=dict(resolution.present_leave),
                     spells=list(resolution.spells),
                     scene_brief=resolution.scene_brief[:1],
                     situations_add=list(resolution.situations_add),
                     situations_remove=list(resolution.situations_remove),
+                    npc_knowledge_upsert=dict(resolution.npc_knowledge_upsert),
+                    deed=resolution.deed,
                 )
 
             render_chat = (
                 trim_chat_for_passive_render(list(context.chat_recent))
-                if stance in {"passive", "wait"}
+                if stance == "passive"
                 else list(context.chat_recent)
             )
 
@@ -129,7 +206,9 @@ class TurnPipeline:
                     location=state.player.location,
                     time=format_label(state.day, state.minutes),
                     present=list(state.characters_active),
+                    offscreen=format_offscreen_lines(state),
                     situations=list(state.situations),
+                    known_ids=build_known_ids(state),
                     extra=dict(state.extra),
                 ),
                 player_action=message,
@@ -143,6 +222,8 @@ class TurnPipeline:
                 chat_recent=render_chat,
                 spellbook=list(context.spellbook),
                 world_pages=render_world,
+                episode=episode,
+                thread_active=bool(context.thread_hint),
             )
             reply = self.renderer.render(render_req)
             prior = last_assistant_message(list(context.chat_recent))
@@ -157,6 +238,13 @@ class TurnPipeline:
                     )
                 )
                 reply = compress_repeated_narrative(reply, prior, fallback=fallback)
+
+            beat_fired = bool(front_outcome and front_outcome.fired_beats)
+            EpisodeDirector.record_outcome(
+                state, episode, stance=stance, beat_fired=beat_fired
+            )
+            # Fractional daily tick each turn so scores don't grow forever.
+            decay_notoriety(state, days=1.0 / 24.0)
 
             wiki_patches = list(front_outcome.wiki_patches) if front_outcome else []
             commit_turn(

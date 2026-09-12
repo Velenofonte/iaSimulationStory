@@ -2,6 +2,15 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, field_validator
 
+from app.models.game_state import (
+    NpcKnowledgeFact,
+    OffscreenCharacter,
+    coerce_fact_list,
+    coerce_id_list,
+    coerce_npc_knowledge_upsert,
+    coerce_present_leave,
+)
+
 
 class CharacterPresentUpdate(BaseModel):
     location: str | None = None
@@ -132,19 +141,34 @@ class PresentReviewResult(BaseModel):
 
     character_updates: dict[str, CharacterPresentUpdate] = Field(default_factory=dict)
     location_updates: dict[str, LocationPresentUpdate] = Field(default_factory=dict)
-    situations_add: list[str] = Field(
+    situations_add: list[NpcKnowledgeFact] = Field(
         default_factory=list,
         description=(
-            "Memoria a medio termine: fatti ancora veri e rilevanti per le prossime scene "
-            "(viaggio, voci, accordi, tensioni locali, stato albo/missioni/iscrizioni). "
-            "Non micro-saluti; non solo catastrofi wiki."
+            "Memoria a medio termine: {id, summary}. Stesso id = aggiorna summary; "
+            "id nuovo = nuovo filo. Non micro-saluti; non solo catastrofi wiki."
         ),
     )
     situations_remove: list[str] = Field(
         default_factory=list,
         description=(
-            "Situations del game state non piu' vere o risolte. "
+            "Ids di situations del game state da chiudere (known_ids.situations). "
             "Non rimuovere stato missioni/registri aperti solo perche' dettagliato."
+        ),
+    )
+    npc_knowledge_upsert: dict[str, list[NpcKnowledgeFact]] = Field(
+        default_factory=dict,
+        description=(
+            "Conoscenza per-NPC: riusa id esistenti per aggiornare summary, "
+            "oppure crea id nuovi per fatti nuovi. Formato "
+            '{ "npc_id": [{"id": "slug", "summary": "..."}] }.'
+        ),
+    )
+    present_leave: dict[str, OffscreenCharacter] = Field(
+        default_factory=dict,
+        description=(
+            "NPC che lasciano la scena: {id: {where, reason}}. "
+            "Usali quando characters_active non li include piu' ma restano "
+            "richiamabili (altra stanza, incarico, ecc.)."
         ),
     )
     front_impacts: list[FrontImpact] = Field(
@@ -160,8 +184,6 @@ class PresentReviewResult(BaseModel):
     confidence: Literal["low", "medium", "high"] = "medium"
 
     @field_validator(
-        "situations_add",
-        "situations_remove",
         "front_impacts",
         "extra_remove",
         mode="before",
@@ -170,10 +192,34 @@ class PresentReviewResult(BaseModel):
     def _coerce_none_lists(cls, v: Any) -> Any:
         return [] if v is None else v
 
+    @field_validator("situations_add", mode="before")
+    @classmethod
+    def _coerce_situations_add(cls, v: Any) -> list[NpcKnowledgeFact]:
+        if v is None:
+            return []
+        return coerce_fact_list(v)
+
+    @field_validator("situations_remove", mode="before")
+    @classmethod
+    def _coerce_situations_remove(cls, v: Any) -> list[str]:
+        if v is None:
+            return []
+        return coerce_id_list(v)
+
     @field_validator("character_updates", "extra_set", mode="before")
     @classmethod
     def _coerce_none_dicts(cls, v: Any) -> Any:
         return {} if v is None else v
+
+    @field_validator("npc_knowledge_upsert", mode="before")
+    @classmethod
+    def _coerce_npc_knowledge(cls, v: Any) -> dict[str, list[NpcKnowledgeFact]]:
+        return coerce_npc_knowledge_upsert(v)
+
+    @field_validator("present_leave", mode="before")
+    @classmethod
+    def _coerce_present_leave(cls, v: Any) -> dict[str, OffscreenCharacter]:
+        return coerce_present_leave(v)
 
     @field_validator("location_updates", mode="before")
     @classmethod
@@ -227,6 +273,13 @@ class CharacterConsolidationUpdate(BaseModel):
     memories_remove: list[str] = Field(default_factory=list)
     spells_add: list[str] = Field(default_factory=list)
     relationship: int | None = None
+    relationship_summary_add: list[str] = Field(
+        default_factory=list,
+        description=(
+            "Riassunto denso degli incontri col PG da appendere in "
+            "'Relazione col giocatore' (non log di turni)."
+        ),
+    )
     open_threads_add: list[str] = Field(default_factory=list)
     open_threads_remove: list[str] = Field(default_factory=list)
     location: str | None = None
@@ -251,6 +304,7 @@ _CHAR_UPDATE_KEYS = {
     "open_threads_add",
     "open_threads_remove",
     "relationship",
+    "relationship_summary_add",
     "location",
     "party_id",
     "promote_tier",

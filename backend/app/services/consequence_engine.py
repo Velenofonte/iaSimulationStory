@@ -53,6 +53,9 @@ class ConsequenceEngine:
                     "mood": runtime.mood,
                     "relationship": runtime.relationship,
                     "location": runtime.location,
+                    "npc_knowledge": [
+                        {"id": f.id, "summary": f.summary} for f in runtime.npc_knowledge
+                    ],
                 }
             else:
                 present_runtime[cid] = {}
@@ -73,7 +76,17 @@ class ConsequenceEngine:
             },
             "characters_active": list(state.characters_active),
             "characters_present": present_runtime,
-            "situations": list(state.situations),
+            "characters_offscreen": {
+                cid: {
+                    "where": entry.where,
+                    "reason": entry.reason,
+                    "from_location": entry.from_location,
+                }
+                for cid, entry in state.characters_offscreen.items()
+            },
+            "situations": [
+                {"id": s.id, "summary": s.summary} for s in state.situations
+            ],
             "party_active": state.party_active,
             "fronts": fronts_slice,
             "extra": dict(state.extra),
@@ -108,7 +121,14 @@ class ConsequenceEngine:
             f"player_location: aggiorna SE il luogo fisico e' cambiato {locations_hint}.\n"
             "characters_active: OBBLIGATORIO SEMPRE — lista COMPLETA sostitutiva "
             "di chi e' FISICAMENTE presente ORA (solo NPC; MAI il PG/id/nome/player); "
-            "[] se solo; mai omettere.\n"
+            "[] se solo; mai omettere. Se player_location e' cambiato, rivaluta da zero: "
+            "togli gli NPC del luogo lasciato; tieni solo chi e' al nuovo posto "
+            "(o compagni in viaggio col PG).\n"
+            "present_leave: per ogni NPC che NON e' piu' in characters_active ma resta "
+            "richiamabile (altra stanza, incarico vicino, e' andato in citta'): "
+            '{ "npc_id": {"where": "...", "reason": "..."} }. '
+            "Il codice manda offscreen anche chi sparisce dalla lista senza voce esplicita, "
+            "ma preferisci motivi chiari.\n"
             "situations = memoria a MEDIO termine: fatti ancora veri e rilevanti "
             "per le prossime scene (viaggio in corso, voci/minacce aperte, accordi, "
             "tensioni locali, stato albo/missioni/registri: chi iscritto, posti liberi).\n"
@@ -120,12 +140,19 @@ class ConsequenceEngine:
             "'[N] posti liberi nel registro di [organizzazione]'.\n"
             "ESEMPI DA NON INCLUDERE: saluti, micro-gesti, fatti statici di lore non "
             "legati a uno sviluppo di trama.\n"
-            "Mantieni le situations attive tra 5 e 12; se superi, consolida o rimuovi "
+            "Mantieni le situations attive tra 1 e 6; se superi, consolida o rimuovi "
             "prima di aggiungere.\n"
             "situations_add: aggiungi fili aperti utili incluso stato missioni; "
             "situations_remove: togli solo risolti/stale/rumore — NON togliere "
             "iscrizioni/registri aperti solo perche' dettagliati.\n"
+            "npc_knowledge_upsert: riusa id da known_ids / Sa (questa partita) per "
+            "aggiornare summary; crea id nuovi solo per fatti nuovi. Formato "
+            '{ "npc_id": [{"id": "slug", "summary": "..."}] }. '
+            "NON copiare situations su tutti i presenti. Se incerto, {}.\n"
             "front_impacts: solo strato 2 (null|distort|block + intent_id) se serve.\n"
+            "Se player_location e' un id NON tra i location id validi sopra, includilo "
+            "comunque in player_location e in location_updates[<id>] con almeno objects "
+            "e/o events: il codice creera' una scheda stub (kind/danger) per il motore episodi.\n"
         )
     def _build_consolidation_user(
         self,
@@ -137,13 +164,31 @@ class ConsequenceEngine:
         memories_block: str,
         transcript: str,
     ) -> str:
-        situations_block = "\n".join(f"- {s}" for s in state.situations) or "(nessuna)"
+        situations_block = (
+            "\n".join(f"- {s.id}: {s.summary}" for s in state.situations) or "(nessuna)"
+        )
+        knowledge_lines: list[str] = []
+        for cid in state.characters_active:
+            runtime = state.characters.get(cid)
+            if not runtime or not runtime.npc_knowledge:
+                continue
+            facts = "; ".join(f"{f.id}: {f.summary}" for f in runtime.npc_knowledge)
+            knowledge_lines.append(f"- {cid}: {facts}")
+        for cid, runtime in state.characters.items():
+            if cid in state.characters_active:
+                continue
+            if not runtime.npc_knowledge:
+                continue
+            facts = "; ".join(f"{f.id}: {f.summary}" for f in runtime.npc_knowledge)
+            knowledge_lines.append(f"- {cid}: {facts}")
+        knowledge_block = "\n".join(knowledge_lines) or "(nessuna)"
         return (
             f"PLAYER_ID (chiave obbligatoria in character_updates): {player_id}\n"
             f"PLAYER_NAME: {state.player.name}\n"
             f"PLAYER_LOCATION_WIKI: {sheet.get('location') or state.player.location}\n"
             f"PLAYER_LOCATION_STATE: {state.player.location}\n\n"
             f"SITUATIONS ATTUALI (candidati a promozione o state_cleanup):\n{situations_block}\n\n"
+            f"NPC_KNOWLEDGE RUNTIME (fatti per-NPC da comprimere in Relazione):\n{knowledge_block}\n\n"
             f"OPEN THREADS ATTUALI (usa queste stringhe esatte in open_threads_remove):\n{threads_block}\n\n"
             f"MEMORIE ATTUALI (usa queste stringhe esatte in memories_remove; non riduplicarle):\n{memories_block}\n\n"
             f"GAME STATE ATTUALE:\n{self._format_game_state(state)}\n\n"
@@ -175,6 +220,11 @@ class ConsequenceEngine:
             "- location: aggiorna se il player si e' spostato stabilmente.\n"
             "- memories_add: NON inventare titoli/status non assegnati in chat "
             "(iscriversi a una missione != ottenere un titolo).\n\n"
+            "Per ogni NPC con npc_knowledge rilevante (non il PG), aggiorna "
+            "character_updates[<npc_id>].relationship_summary_add con 1-2 voci dense "
+            "('cosa abbiamo vissuto insieme'): comprimi start/incidente/fine in poche "
+            "frasi; NON loggare ogni turno; NON duplicare le Memorie del PG. "
+            "Opzionale: relationship (punteggio intero) se la chat mostra un cambio chiaro.\n\n"
             "Se una situation risolta ha lasciato segni su luoghi, fazioni o comunita' "
             "(non sul singolo player), promuovila in location_updates o world_updates "
             "(events_add, tensions_add, sections_add) invece che nelle memorie del player. "
@@ -226,7 +276,43 @@ class ConsequenceEngine:
                         existing.objects = list(dict.fromkeys([*existing.objects, *orphan.objects]))
                     if orphan.events:
                         existing.events = list(dict.fromkeys([*existing.events, *orphan.events]))
-        delta = present_review_to_delta(result, apply_presence=True)
+        # Ensure stubs for new location ids so the episode engine can read kind/danger.
+        known = set(self._valid_location_ids())
+        candidates = []
+        if result.player_location:
+            candidates.append(result.player_location)
+        candidates.extend(result.location_updates.keys())
+        for raw_id in candidates:
+            lid = str(raw_id or "").strip()
+            if not lid or lid.startswith("_"):
+                continue
+            norm = lid.lower().replace("_", "-")
+            if lid in known or norm in known:
+                continue
+            kind = "default"
+            danger = "medium"
+            lower = norm
+            # Inhabited places win over biome words: "avamposto-bosco-silente" is an
+            # outpost in a forest, not wilderness.
+            if any(x in lower for x in ("locanda", "inn", "taverna", "osteria")):
+                kind, danger = "inn", "low"
+            elif any(x in lower for x in ("avamposto", "outpost", "fortino")):
+                kind, danger = "outpost", "medium"
+            elif any(x in lower for x in ("citta", "city", "villaggio", "piazza", "gilda")):
+                kind, danger = "settlement", "low"
+            elif any(x in lower for x in ("rovina", "ruin", "cava", "tomba")):
+                kind, danger = "ruin", "high"
+            elif any(x in lower for x in ("strada", "road", "sentiero", "via")):
+                kind, danger = "road", "medium"
+            elif any(x in lower for x in ("bosco", "forest", "wilderness", "deserto")):
+                kind, danger = "wilderness", "high"
+            try:
+                self.wiki_writer.ensure_location(norm, kind=kind, danger=danger)
+                known.add(norm)
+            except Exception as exc:
+                print(f"[present_review] ensure_location failed for {norm}: {exc}")
+
+        delta = present_review_to_delta(result, apply_presence=True, state=state)
         apply_scene_delta(state, delta)
         if delta.front_impacts:
             self.fronts.apply_impacts(state, delta.front_impacts)
@@ -283,8 +369,26 @@ class ConsequenceEngine:
         if result.party_active:
             state.party_active = result.party_active
         for item in result.state_cleanup:
-            if item in state.situations:
-                state.situations.remove(item)
+            rid = str(item or "").strip()
+            if not rid:
+                continue
+            state.situations = [
+                s
+                for s in state.situations
+                if s.id != rid
+                and s.id.casefold() != rid.casefold()
+                and s.summary != rid
+                and s.summary.casefold() != rid.casefold()
+            ]
+        # Deterministic promote of notoriety runtime → wiki section (setting-agnostic).
+        try:
+            from app.services.notoriety import format_wiki_section
+
+            lines = format_wiki_section(state)
+            if lines:
+                self.wiki_writer.write_notoriety_section(player_id, lines)
+        except Exception as exc:
+            print(f"[consolidation] notoriety wiki write failed: {exc}")
         state.turns_since_consolidation = 0
         self.lint.run()
         self.saves.save_game_state(state)

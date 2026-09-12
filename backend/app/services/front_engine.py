@@ -11,6 +11,7 @@ from app.models import (
     FrontRuntime,
     GameState,
 )
+from app.models.game_state import NpcKnowledgeFact, coerce_fact_list, slugify_fact_id
 from app.models.reviews import FrontImpact
 from app.models.turn import FrontOutcome
 from app.services.front_loader import FrontBeat, FrontDefinition, FrontLoader
@@ -27,6 +28,13 @@ def format_due_day(day: int) -> str:
 
 def absolute_minutes(day: int, minutes: int) -> int:
     return max(0, int(day)) * 1440 + max(0, int(minutes) % 1440)
+
+
+def _dedupe_facts(facts: list[NpcKnowledgeFact]) -> list[NpcKnowledgeFact]:
+    by_id: dict[str, NpcKnowledgeFact] = {}
+    for fact in coerce_fact_list(facts):
+        by_id[fact.id] = fact
+    return list(by_id.values())
 
 
 def day_minutes_from_abs(abs_minutes: int) -> tuple[int, int]:
@@ -169,7 +177,9 @@ class FrontEngine:
                 outcome.fired_beats.append(beat.id)
                 outcome.wiki_patches.extend(fire_data["wiki_patches"])
                 outcome.beat_summaries.extend(fire_data["beat_summaries"])
-                outcome.situations_add.extend(fire_data["situations_add"])
+                outcome.situations_add.extend(
+                    coerce_fact_list(fire_data["situations_add"])
+                )
                 outcome.characters_add.extend(fire_data["characters_add"])
                 for loc_id, events in fire_data["location_events"].items():
                     outcome.location_events.setdefault(loc_id, []).extend(events)
@@ -193,7 +203,7 @@ class FrontEngine:
             runtime.accumulated_minutes = max(0, now_abs - marker)
 
         # de-dupe lists while preserving order
-        outcome.situations_add = list(dict.fromkeys(outcome.situations_add))
+        outcome.situations_add = _dedupe_facts(list(outcome.situations_add))
         outcome.characters_add = list(dict.fromkeys(outcome.characters_add))
         outcome.beat_summaries = list(dict.fromkeys(outcome.beat_summaries))
         for loc_id, events in list(outcome.location_events.items()):
@@ -652,7 +662,14 @@ class FrontEngine:
             character_locations[member.wiki] = member.default_location or beat.place
 
         return {
-            "situations_add": list(bullets),
+            "situations_add": [
+                NpcKnowledgeFact(
+                    id=slugify_fact_id(f"front_{beat.id}_{i}_{b}"),
+                    summary=b,
+                )
+                for i, b in enumerate(bullets)
+                if (b or "").strip()
+            ],
             "characters_add": characters_add,
             "character_locations": character_locations,
             "location_events": location_events,

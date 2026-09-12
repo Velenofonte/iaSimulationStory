@@ -110,7 +110,15 @@ def fake_llm(monkeypatch: pytest.MonkeyPatch):
 
     state: dict[str, Any] = {"responses": [], "calls": []}
 
-    def _complete(self, *, system: str, user: str, model=None, temperature: float = 0.8) -> str:
+    def _complete(
+        self,
+        *,
+        system: str,
+        user: str,
+        model=None,
+        temperature: float = 0.8,
+        **_kwargs,
+    ) -> str:
         self.last_usage = None
         state["calls"].append({"system": system, "user": user, "model": model})
         if state["responses"]:

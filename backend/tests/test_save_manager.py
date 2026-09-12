@@ -3,6 +3,7 @@
 from pathlib import Path
 
 from app.models import GameState, PlayerState, PresentReviewResult
+from app.models.game_state import NpcKnowledgeFact
 from app.services.consequence_engine import ConsequenceEngine
 from app.services.save_manager import SaveManager
 
@@ -10,11 +11,11 @@ from app.services.save_manager import SaveManager
 def test_session_roundtrip(tmp_path: Path) -> None:
     saves = SaveManager(tmp_path)
     state = saves.create_session("Rion", "e-rantel")
-    state.situations.append("test situation")
+    state.situations.append(NpcKnowledgeFact(id="test_situation", summary="test situation"))
     saves.save_game_state(state)
     loaded = saves.load_game_state(state.session_id)
     assert loaded.player.name == "Rion"
-    assert "test situation" in loaded.situations
+    assert any(s.summary == "test situation" for s in loaded.situations)
 
 
 def test_delete_session_removes_dir_and_clears_active(tmp_path: Path) -> None:
@@ -51,7 +52,7 @@ def test_present_review_merge() -> None:
     engine.apply_present_review(state, result)
     assert state.player.location == "e-rantel/tavern"
     assert state.characters_active == ["npc1"]
-    assert "birra sul tavolo" in state.situations
+    assert any(s.summary == "birra sul tavolo" for s in state.situations)
     assert state.time == before_time  # orologio non toccato dalla review
 
 

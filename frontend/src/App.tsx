@@ -28,6 +28,7 @@ import {
   type Spellbook,
   type StorySummary,
 } from "./api";
+import { OfflineBanner, PwaInstall } from "./pwa";
 import "./App.css";
 
 type Message = { role: "user" | "assistant"; content: string };
@@ -761,6 +762,7 @@ function App() {
               </section>
             )}
 
+            <OfflineBanner />
             {error && <p className="error create-error">{error}</p>}
           </main>
 
@@ -818,6 +820,7 @@ function App() {
       <div className="start-screen">
         <div className="start-veil" />
         <div className="start-panel">
+          <OfflineBanner />
           <p className="brand">{storyName}</p>
           <h1>Simulatore narrativo</h1>
           <p className="lede">Esplora il mondo. Ogni avventura ha la sua wiki isolata.</p>
@@ -870,6 +873,7 @@ function App() {
             )}
           </section>
           {error && <p className="error">{error}</p>}
+          <PwaInstall />
         </div>
       </div>
     );
@@ -965,7 +969,7 @@ function App() {
                         </div>
                         <p className="muted arc-beat-meta">
                           {beat.place}
-                          {beat.hours_after_previous >= 24
+                          {beat.hours_after_previous != null && beat.hours_after_previous >= 24
                             ? ` · +${Math.round(beat.hours_after_previous / 24)}g dal precedente`
                             : ""}
                         </p>
@@ -987,9 +991,11 @@ function App() {
           >
             {state?.situations?.length ? (
               <ul className="chips">
-                {state.situations.map((s) => (
-                  <li key={s}>{s}</li>
-                ))}
+                {state.situations.map((s) => {
+                  const id = typeof s === "string" ? s : s.id;
+                  const text = typeof s === "string" ? s : s.summary;
+                  return <li key={id}>{text}</li>;
+                })}
               </ul>
             ) : (
               <p className="muted">Nessuna situazione attiva.</p>
@@ -1085,6 +1091,7 @@ function App() {
             </span>
           )}
         </header>
+        <OfflineBanner />
 
         <div className="messages">
           {messages.map((m, i) => (

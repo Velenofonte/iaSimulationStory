@@ -51,6 +51,13 @@ class Settings(BaseSettings):
     narrative_spellbook_on_demand: bool = False
     review_state_slice: bool = False
 
+    # Episode engine (free-mode / ambient openings). 0 / empty = defaults.
+    episode_engine_enabled: bool = True
+    episode_cooldown_turns: int = 2
+    episode_quiet_ramp: float = 1.0
+    episode_seed_salt: str = ""
+    thread_stall_turns: int = 3
+
     @property
     def stories_dir(self) -> Path:
         return self.project_root / "stories"

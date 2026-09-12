@@ -77,6 +77,14 @@ def load_story_ingest_prompt(story_id: str) -> str:
     return path.read_text(encoding="utf-8").strip()
 
 
+def load_story_episode_prompt(story_id: str) -> str:
+    """Optional story-local episode / notoriety rules (stories/<id>/prompts/episode.md)."""
+    path = settings.story_dir(story_id) / "prompts" / "episode.md"
+    if not path.is_file():
+        return ""
+    return path.read_text(encoding="utf-8").strip()
+
+
 def resolve_seed_wiki(story_id: str) -> Path:
     seed = settings.story_wiki_seed(story_id)
     if not seed.is_dir():

@@ -203,6 +203,27 @@ class WikiQuery:
         post = frontmatter.load(path)
         return dict(post.metadata), post.content
 
+    def read_location_meta(self, location_id: str) -> dict:
+        """Frontmatter for a location (kind, danger, …). Empty dict if missing."""
+        key = (location_id or "").strip()
+        if not key:
+            return {}
+        path = self.resolve_id(key)
+        if not path or not path.exists():
+            # Prefer locations/ folder even when alias missing.
+            candidate = self.wiki_dir / "locations" / f"{key}.md"
+            if candidate.exists():
+                path = candidate
+            else:
+                alt = key.replace("_", "-")
+                candidate = self.wiki_dir / "locations" / f"{alt}.md"
+                if candidate.exists():
+                    path = candidate
+                else:
+                    return {}
+        meta, _ = self.read_page(path)
+        return dict(meta)
+
     def load_character(
         self,
         entity_id: str,

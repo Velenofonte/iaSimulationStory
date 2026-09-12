@@ -27,6 +27,10 @@ piano. Formato:
     "open_threads_add": ["..."],
     "open_threads_remove": ["..."],
     "location": "id-luogo-attuale"
+  },
+  "<npc_id>": {
+    "relationship_summary_add": ["Ha fatto col PG la missione lupi; incidente X lungo il tragitto."],
+    "relationship": 2
   }
 }
 ```
@@ -101,6 +105,19 @@ ESATTE da OPEN THREADS ATTUALI.
 MEMORIES — attenzione:
 - NON inventare titoli, gradi o status ("cacciatore di lupi", ecc.) se non sono
   stati assegnati esplicitamente in chat. Iscriversi a una missione != ottenere un titolo.
+
+---
+
+RELATIONSHIP_SUMMARY_ADD — Relazione col giocatore (schede NPC)
+
+Per ogni NPC con npc_knowledge runtime rilevante (NON il PG), in
+character_updates[<npc_id>]:
+- relationship_summary_add: 1-2 voci dense su "cosa abbiamo vissuto insieme"
+  (es. missione lupi: accettata, incidente X, conclusa → UNA voce).
+- Comprimi start/incidente/fine; vietato log turno-per-turno.
+- NON duplicare le Memorie del PG; e' la prospettiva dell'NPC sul rapporto.
+- relationship (intero, opzionale): solo se la chat mostra un cambio chiaro di legame.
+  Il codice scrive `Punteggio: N` + i bullet nella stessa sezione Relazione.
 
 ---
 

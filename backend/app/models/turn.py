@@ -5,8 +5,18 @@ from typing import Any
 from pydantic import BaseModel, Field, field_validator
 
 from app.models.chat import ChatMessage
-from app.models.game_state import GameState
+from app.models.game_state import (
+    GameState,
+    NpcKnowledgeFact,
+    OffscreenCharacter,
+    DeedRecord,
+    coerce_fact_list,
+    coerce_id_list,
+    coerce_npc_knowledge_upsert,
+    coerce_present_leave,
+)
 from app.models.narrative import (
+    Episode,
     NarrativeCanonFacts,
     NarrativeChatTurn,
     NarrativeSpell,
@@ -23,10 +33,20 @@ class TurnResolution(BaseModel):
     time: NarrativeTime
     location: str | None = None
     present: list[str] | None = None
+    present_join: list[str] = Field(default_factory=list)
+    present_leave: dict[str, OffscreenCharacter] = Field(default_factory=dict)
     spells: list[NarrativeSpell] = Field(default_factory=list)
     scene_brief: list[str] = Field(default_factory=list)
-    situations_add: list[str] = Field(default_factory=list)
-    situations_remove: list[str] = Field(default_factory=list)
+    situations_add: list[NpcKnowledgeFact] = Field(default_factory=list)
+    situations_remove: list[str] = Field(
+        default_factory=list,
+        description="Ids of situations to close (from known_ids.situations)",
+    )
+    npc_knowledge_upsert: dict[str, list[NpcKnowledgeFact]] = Field(default_factory=dict)
+    deed: DeedRecord | None = Field(
+        default=None,
+        description="Impresa notabile di questo turno (scala id dal pack); null se nessuna",
+    )
 
     @field_validator("spells", mode="before")
     @classmethod
@@ -63,7 +83,33 @@ class TurnResolution(BaseModel):
                     out.append(s)
         return list(dict.fromkeys(out))
 
-    @field_validator("scene_brief", "situations_add", "situations_remove", mode="before")
+    @field_validator("present_join", mode="before")
+    @classmethod
+    def _coerce_present_join(cls, v: object) -> list[str]:
+        if v is None:
+            return []
+        if isinstance(v, str):
+            v = [v] if v.strip() else []
+        if not isinstance(v, list):
+            return []
+        out: list[str] = []
+        for item in v:
+            if isinstance(item, dict):
+                name = item.get("name") or item.get("id") or item.get("role")
+                if name:
+                    out.append(str(name).strip())
+            else:
+                s = str(item or "").strip()
+                if s:
+                    out.append(s)
+        return list(dict.fromkeys(out))
+
+    @field_validator("present_leave", mode="before")
+    @classmethod
+    def _coerce_present_leave(cls, v: Any) -> dict[str, OffscreenCharacter]:
+        return coerce_present_leave(v)
+
+    @field_validator("scene_brief", mode="before")
     @classmethod
     def _coerce_brief(cls, v: object) -> list[str]:
         if v is None:
@@ -74,6 +120,35 @@ class TurnResolution(BaseModel):
             return []
         return [str(x).strip() for x in v if str(x or "").strip()]
 
+    @field_validator("situations_add", mode="before")
+    @classmethod
+    def _coerce_situations_add(cls, v: object) -> list[NpcKnowledgeFact]:
+        return coerce_fact_list(v)
+
+    @field_validator("situations_remove", mode="before")
+    @classmethod
+    def _coerce_situations_remove(cls, v: object) -> list[str]:
+        return coerce_id_list(v)
+
+    @field_validator("npc_knowledge_upsert", mode="before")
+    @classmethod
+    def _coerce_npc_knowledge(cls, v: Any) -> dict[str, list[NpcKnowledgeFact]]:
+        return coerce_npc_knowledge_upsert(v)
+
+    @field_validator("deed", mode="before")
+    @classmethod
+    def _coerce_deed(cls, v: Any) -> DeedRecord | None:
+        if v is None or v is False or v == "" or v == {}:
+            return None
+        if isinstance(v, DeedRecord):
+            return v
+        if isinstance(v, dict):
+            try:
+                return DeedRecord.model_validate(v)
+            except Exception:
+                return None
+        return None
+
 
 class SceneStateDelta(BaseModel):
     """Atomic scene mutations. None on replace-fields means no-touch."""
@@ -81,7 +156,9 @@ class SceneStateDelta(BaseModel):
     player_location: str | None = None
     characters_active: list[str] | None = None
     characters_add: list[str] = Field(default_factory=list)
-    situations_add: list[str] = Field(default_factory=list)
+    present_join: list[str] = Field(default_factory=list)
+    present_leave: dict[str, OffscreenCharacter] = Field(default_factory=dict)
+    situations_add: list[NpcKnowledgeFact] = Field(default_factory=list)
     situations_remove: list[str] = Field(default_factory=list)
     character_runtime: dict[str, CharacterPresentUpdate] = Field(default_factory=dict)
     location_runtime: dict[str, LocationPresentUpdate] = Field(default_factory=dict)
@@ -92,11 +169,11 @@ class SceneStateDelta(BaseModel):
     turns_present_reset: bool = False
     turns_consolidation_reset: bool = False
     preserve_scene_presence: bool = False
+    npc_knowledge_upsert: dict[str, list[NpcKnowledgeFact]] = Field(default_factory=dict)
 
     @field_validator(
         "characters_add",
-        "situations_add",
-        "situations_remove",
+        "present_join",
         "front_impacts",
         "extra_remove",
         mode="before",
@@ -105,10 +182,39 @@ class SceneStateDelta(BaseModel):
     def _coerce_none_lists(cls, v: Any) -> Any:
         return [] if v is None else v
 
-    @field_validator("character_runtime", "location_runtime", "extra_set", mode="before")
+    @field_validator("situations_add", mode="before")
+    @classmethod
+    def _coerce_situations_add(cls, v: Any) -> list[NpcKnowledgeFact]:
+        if v is None:
+            return []
+        return coerce_fact_list(v)
+
+    @field_validator("situations_remove", mode="before")
+    @classmethod
+    def _coerce_situations_remove(cls, v: Any) -> list[str]:
+        if v is None:
+            return []
+        return coerce_id_list(v)
+
+    @field_validator(
+        "character_runtime",
+        "location_runtime",
+        "extra_set",
+        mode="before",
+    )
     @classmethod
     def _coerce_none_dicts(cls, v: Any) -> Any:
         return {} if v is None else v
+
+    @field_validator("present_leave", mode="before")
+    @classmethod
+    def _coerce_present_leave(cls, v: Any) -> dict[str, OffscreenCharacter]:
+        return coerce_present_leave(v)
+
+    @field_validator("npc_knowledge_upsert", mode="before")
+    @classmethod
+    def _coerce_npc_knowledge(cls, v: Any) -> dict[str, list[NpcKnowledgeFact]]:
+        return coerce_npc_knowledge_upsert(v)
 
     @field_validator("characters_active", mode="before")
     @classmethod
@@ -136,7 +242,7 @@ class FrontOutcome(BaseModel):
     """Deterministic front tick side-effects (no direct state writes)."""
 
     fired_beats: list[str] = Field(default_factory=list)
-    situations_add: list[str] = Field(default_factory=list)
+    situations_add: list[NpcKnowledgeFact] = Field(default_factory=list)
     characters_add: list[str] = Field(default_factory=list)
     location_events: dict[str, list[str]] = Field(default_factory=dict)
     location_atmosphere: dict[str, str] = Field(default_factory=dict)
@@ -148,7 +254,6 @@ class FrontOutcome(BaseModel):
 
     @field_validator(
         "fired_beats",
-        "situations_add",
         "characters_add",
         "wiki_patches",
         "beat_summaries",
@@ -157,6 +262,13 @@ class FrontOutcome(BaseModel):
     @classmethod
     def _coerce_none_lists(cls, v: Any) -> Any:
         return [] if v is None else v
+
+    @field_validator("situations_add", mode="before")
+    @classmethod
+    def _coerce_situations_add(cls, v: Any) -> list[NpcKnowledgeFact]:
+        if v is None:
+            return []
+        return coerce_fact_list(v)
 
     @field_validator("location_events", "location_atmosphere", "character_locations", mode="before")
     @classmethod
@@ -190,6 +302,14 @@ class NarrativeRenderRequest(BaseModel):
     world_pages: list[NarrativeWorldPage] = Field(
         default_factory=list,
         description="Lore mondo per il cast (es. magic-tier); vuoto se non serve",
+    )
+    episode: Episode | None = Field(
+        default=None,
+        description="Mandato episodio ambient da narrare con presenza propria",
+    )
+    thread_active: bool = Field(
+        default=False,
+        description="True se Pass 1 ha un filo in stallo: anti-eco nel brief/prosa",
     )
 
 

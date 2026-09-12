@@ -61,7 +61,7 @@ export type GameState = {
     race?: string | null;
   };
   characters_active: string[];
-  situations: string[];
+  situations: Array<string | { id: string; summary: string }>;
   party_active?: string | null;
   fronts?: Record<string, unknown>;
   turns_since_present_review: number;

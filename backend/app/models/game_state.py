@@ -1,6 +1,7 @@
+import re
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 
 
 class PlayerState(BaseModel):
@@ -18,11 +19,179 @@ class PlayerState(BaseModel):
         return self.name.lower().replace(" ", "-")
 
 
+class NpcKnowledgeFact(BaseModel):
+    """Stable {id, summary} record — NPC knowledge or medium-term situation thread."""
+
+    id: str
+    summary: str
+
+
+def slugify_fact_id(text: str, *, max_len: int = 48) -> str:
+    """Deterministic slug from free text (legacy string → id)."""
+    raw = (text or "").strip().casefold()
+    raw = re.sub(r"[^\w\s-]", " ", raw, flags=re.UNICODE)
+    raw = re.sub(r"[\s\-]+", "_", raw).strip("_")
+    return raw[:max_len].strip("_") or "thread"
+
+
+def coerce_fact(item: Any) -> NpcKnowledgeFact | None:
+    """Accept NpcKnowledgeFact, {id, summary}, or legacy free-text string."""
+    if isinstance(item, NpcKnowledgeFact):
+        fid = (item.id or "").strip()
+        summary = (item.summary or "").strip()
+        if fid and summary:
+            return NpcKnowledgeFact(id=fid, summary=summary)
+        return None
+    if isinstance(item, dict):
+        fid = str(item.get("id") or "").strip()
+        summary = str(item.get("summary") or item.get("text") or "").strip()
+        if summary and not fid:
+            fid = slugify_fact_id(summary)
+        if fid and summary:
+            return NpcKnowledgeFact(id=fid, summary=summary)
+        return None
+    if isinstance(item, str) and item.strip():
+        text = item.strip()
+        return NpcKnowledgeFact(id=slugify_fact_id(text), summary=text)
+    return None
+
+
+def coerce_fact_list(v: Any) -> list[NpcKnowledgeFact]:
+    """Coerce list of facts; dedupe by id (last wins)."""
+    if v is None:
+        return []
+    if isinstance(v, (str, dict, NpcKnowledgeFact)):
+        v = [v]
+    if not isinstance(v, list):
+        return []
+    by_id: dict[str, NpcKnowledgeFact] = {}
+    for item in v:
+        fact = coerce_fact(item)
+        if fact:
+            by_id[fact.id] = fact
+    return list(by_id.values())
+
+
+def coerce_id_list(v: Any) -> list[str]:
+    """Coerce situations_remove / cleanup: prefer id; accept legacy summary strings."""
+    if v is None:
+        return []
+    if isinstance(v, str):
+        v = [v] if v.strip() else []
+    if not isinstance(v, list):
+        return []
+    out: list[str] = []
+    for item in v:
+        if isinstance(item, dict):
+            fid = str(item.get("id") or "").strip()
+            if fid:
+                out.append(fid)
+            elif item.get("summary"):
+                out.append(slugify_fact_id(str(item["summary"])))
+        elif isinstance(item, NpcKnowledgeFact):
+            if item.id.strip():
+                out.append(item.id.strip())
+        else:
+            s = str(item or "").strip()
+            if s:
+                out.append(s)
+    return list(dict.fromkeys(out))
+
+
+def coerce_npc_knowledge_upsert(v: Any) -> dict[str, list[NpcKnowledgeFact]]:
+    """LLM may send {npc_id: [{id, summary}, ...]} or flat / malformed shapes."""
+    if v is None or not isinstance(v, dict):
+        return {}
+    out: dict[str, list[NpcKnowledgeFact]] = {}
+    for npc_id, facts in v.items():
+        cid = str(npc_id or "").strip()
+        if not cid:
+            continue
+        parsed = coerce_fact_list(facts)
+        if parsed:
+            out[cid] = parsed
+    return out
+
+
+class OffscreenCharacter(BaseModel):
+    """NPC who left the scene but may return (narrative-driven, no TTL)."""
+
+    where: str | None = None
+    reason: str | None = None
+    from_location: str | None = None
+
+
+def coerce_present_leave(v: Any) -> dict[str, OffscreenCharacter]:
+    """Accept [{"id","where","reason"}], {"id": {...}}, or ["id"]."""
+    if v is None:
+        return {}
+    out: dict[str, OffscreenCharacter] = {}
+
+    def _from_dict(raw: dict[str, Any]) -> OffscreenCharacter:
+        where = raw.get("where") or raw.get("location") or raw.get("dove")
+        reason = raw.get("reason") or raw.get("perche") or raw.get("why")
+        from_loc = raw.get("from_location") or raw.get("from")
+        return OffscreenCharacter(
+            where=str(where).strip() if where else None,
+            reason=str(reason).strip() if reason else None,
+            from_location=str(from_loc).strip() if from_loc else None,
+        )
+
+    if isinstance(v, dict):
+        for key, val in v.items():
+            cid = str(key or "").strip()
+            if not cid:
+                continue
+            if isinstance(val, OffscreenCharacter):
+                out[cid] = OffscreenCharacter(
+                    where=val.where,
+                    reason=val.reason,
+                    from_location=val.from_location,
+                )
+            elif isinstance(val, dict):
+                # Allow {"id": "milo", "where": "..."} stuffed under a wrong key.
+                nested_id = str(val.get("id") or val.get("name") or "").strip()
+                if nested_id and nested_id != cid and not any(
+                    k in val for k in ("where", "reason", "location", "dove", "from_location", "from")
+                ):
+                    out[nested_id] = _from_dict(val)
+                else:
+                    if nested_id:
+                        cid = nested_id
+                    out[cid] = _from_dict(val)
+            elif isinstance(val, str) and val.strip():
+                out[cid] = OffscreenCharacter(reason=val.strip())
+            else:
+                out[cid] = OffscreenCharacter()
+        return out
+
+    if isinstance(v, list):
+        for item in v:
+            if isinstance(item, str):
+                cid = item.strip()
+                if cid:
+                    out[cid] = OffscreenCharacter()
+            elif isinstance(item, dict):
+                cid = str(item.get("id") or item.get("name") or "").strip()
+                if cid:
+                    out[cid] = _from_dict(item)
+            elif isinstance(item, OffscreenCharacter):
+                continue
+        return out
+
+    if isinstance(v, str) and v.strip():
+        out[v.strip()] = OffscreenCharacter()
+        return out
+
+    return out
+
+
 class CharacterRuntime(BaseModel):
     location: str | None = None
     mood: str | None = None
     relationship: int = 0
     relationship_delta: int = 0
+    npc_knowledge: list[NpcKnowledgeFact] = Field(default_factory=list)
 
 
 class LocationRuntime(BaseModel):
@@ -69,6 +238,43 @@ class ArcTimelineResponse(BaseModel):
     fronts: list[ArcTimelineFront] = Field(default_factory=list)
 
 
+class EpisodeRuntime(BaseModel):
+    """Ambient episode engine counters (no setting lore)."""
+
+    turn_index: int = 0
+    turns_since_event: int = 0
+    last_tier: int = 0
+    recent_kinds: list[str] = Field(default_factory=list)
+    last_beat_turn: int | None = None
+    last_stance: str = ""
+    consecutive_events: int = 0
+
+
+class DeedRecord(BaseModel):
+    """A notable deed the world may remember (structured; scale id from pack)."""
+
+    id: str
+    summary: str
+    scale: str = ""
+    witnesses: list[str] = Field(default_factory=list)
+    attributed: bool = True
+    evidence: str = ""
+    beneficiary: str = ""
+    day: int | None = None
+    persistent: bool = False
+
+
+class NotorietyRuntime(BaseModel):
+    """How the world currently reads the player (neutral; no preferred strategy)."""
+
+    score: float = 0.0
+    reach: str = "none"
+    attribution: dict[str, float] = Field(default_factory=dict)
+    labels: list[str] = Field(default_factory=list)
+    legend_score: float = 0.0
+    deeds: list[DeedRecord] = Field(default_factory=list)
+
+
 class GameState(BaseModel):
     session_id: str
     story_id: str = "overlord"
@@ -77,11 +283,19 @@ class GameState(BaseModel):
     time: str = "Giorno 1 · mattina · 08:00"
     player: PlayerState = Field(default_factory=PlayerState)
     characters_active: list[str] = Field(default_factory=list)
+    characters_offscreen: dict[str, OffscreenCharacter] = Field(default_factory=dict)
     characters: dict[str, CharacterRuntime] = Field(default_factory=dict)
     locations: dict[str, LocationRuntime] = Field(default_factory=dict)
-    situations: list[str] = Field(default_factory=list)
+    situations: list[NpcKnowledgeFact] = Field(default_factory=list)
     party_active: str | None = None
     fronts: dict[str, FrontRuntime] = Field(default_factory=dict)
+    episode: EpisodeRuntime = Field(default_factory=EpisodeRuntime)
+    notoriety: NotorietyRuntime = Field(default_factory=NotorietyRuntime)
     turns_since_present_review: int = 0
     turns_since_consolidation: int = 0
     extra: dict[str, Any] = Field(default_factory=dict)
+
+    @field_validator("situations", mode="before")
+    @classmethod
+    def _coerce_situations(cls, v: Any) -> list[NpcKnowledgeFact]:
+        return coerce_fact_list(v)

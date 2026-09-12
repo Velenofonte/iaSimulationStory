@@ -25,6 +25,18 @@ Obbligatorio in OGNI review, mai omesso, mai null.
 - [] se il PG e' solo. Correggi presenze rimaste stale dal turno precedente.
 - Usa id wiki se noti; altrimenti ruoli gia' emersi in chat. Mai inventare nomi propri.
 - VIETATO includere il PG stesso (id, nome, "player"): sono solo NPC / ruoli terzi.
+- Se player_location e' cambiato rispetto allo state: rivaluta da zero. Gli NPC del
+  luogo lasciato NON restano in lista. Metti solo chi e' al nuovo posto (o compagni
+  che viaggiano col PG). Esempio: uscito dalla bottega → togli l'alchimista.
+- Anche SENZA cambio luogo: togli chi e' andato in un'altra stanza, via in citta',
+  o non e' piu' col PG. Non lasciare stale cast.
+
+PRESENT_LEAVE
+- Per ogni NPC tolto da characters_active ma ancora richiamabile dalla narrazione,
+  emetti present_leave: { "npc_id": { "where": "...", "reason": "..." } }.
+- where/reason spiegano dove e' e perche' (es. retrobottega / a cercare un tome).
+- Il codice manda offscreen anche chi sparisce dalla lista senza voce esplicita;
+  preferisci comunque motivi chiari. Controlla characters_offscreen nello state.
 
 ---
 
@@ -71,6 +83,23 @@ situations_remove — controlla sempre le situations gia' presenti nello state.
 - Usa stringhe ESATTE gia' presenti nello state quando rimuovi.
   Esempio: rimuovi "in viaggio verso X" se il PG e' gia' arrivato a X;
   rimuovi "in combattimento" se lo scontro si e' concluso.
+
+---
+
+NPC_KNOWLEDGE_UPSERT — conoscenza per-NPC (upsert per id)
+
+Formato: { "npc_id": [{ "id": "slug", "summary": "..." }, ...] }
+
+- RIUSA id gia' presenti nel runtime / Sa (questa partita) per aggiornare summary.
+- Aggiungi id nuovi SOLO per fatti chiaramente detti/condivisi e ancora assenti.
+- NON inventare varianti di id (`reclamo_kael_v2`) se esiste gia' `reclamo_kael`.
+- NON copiare situations globali su tutti i presenti: solo chi era presente/coinvolto.
+- Se incerto, lascia {}.
+
+SITUATIONS — fili medi {id, summary}
+
+- situations_add: [{ "id": "...", "summary": "..." }]. Stesso id = aggiorna summary.
+- situations_remove: lista di **id** (non il testo summary) da chiudere.
 
 ---
 

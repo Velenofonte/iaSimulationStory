@@ -201,7 +201,7 @@ def test_absent_no_situations_present_hydrates(tmp_path: Path) -> None:
 
     state2 = GameState(session_id="s2", player=PlayerState(location="village"))
     engine.activate(state2, "test_arc")
-    assert any("tranquillo" in s for s in state2.situations)
+    assert any("tranquillo" in s.summary for s in state2.situations)
     assert "hero" in state2.characters_active
 
 

@@ -49,13 +49,20 @@ _BUDGET_SECTION_PRIORITY = (
     "Allineamento",
 )
 
-
 _PLAYER_NARRATOR_ONLY_SECTIONS = frozenset({"Memorie", "Open threads"})
 _PLAYER_NARRATOR_ONLY_LABEL = "SOLO NARRATORE, non conoscenza NPC"
+# Pass 2: strip private player agenda entirely from the card.
+_PLAYER_RENDER_STRIP_SECTIONS = frozenset({"Memorie", "Open threads"})
 
 
 class PromptBuilder:
-    def build_prompt_card(self, card: CharacterCard, runtime: dict | None = None) -> str:
+    def build_prompt_card(
+        self,
+        card: CharacterCard,
+        runtime: dict | None = None,
+        *,
+        render: bool = False,
+    ) -> str:
         runtime = runtime or {}
         lines = [
             f"ID: {card.id}",
@@ -73,15 +80,25 @@ class PromptBuilder:
         is_player = str(card.role or "").lower() == "player"
 
         def _section_line(key: str, text: str) -> str:
-            if is_player and key in _PLAYER_NARRATOR_ONLY_SECTIONS:
+            if (
+                is_player
+                and not render
+                and key in _PLAYER_NARRATOR_ONLY_SECTIONS
+            ):
                 return f"{key} ({_PLAYER_NARRATOR_ONLY_LABEL}): {text}"
             return f"{key}: {text}"
 
-        # Controlled player: full sheet, no section/budget cuts.
-        if is_player:
-            for key in _LEGACY_SECTION_ORDER:
+        def _iter_section_keys(order: tuple[str, ...]):
+            for key in order:
+                if is_player and render and key in _PLAYER_RENDER_STRIP_SECTIONS:
+                    continue
                 if key in sections:
-                    lines.append(_section_line(key, sections[key]))
+                    yield key
+
+        # Controlled player: full sheet (Pass 1) or stripped agenda (Pass 2).
+        if is_player:
+            for key in _iter_section_keys(_LEGACY_SECTION_ORDER):
+                lines.append(_section_line(key, sections[key]))
             if runtime.get("mood"):
                 lines.append(f"Mood attuale: {runtime['mood']}")
             if runtime.get("relationship") is not None:
@@ -92,18 +109,15 @@ class PromptBuilder:
         budget = self._tier_budget(card.tier)
 
         if budget <= 0:
-            for key in _LEGACY_SECTION_ORDER:
-                if key in sections:
-                    text = sections[key]
-                    if section_cap > 0:
-                        text = text[:section_cap]
-                    lines.append(_section_line(key, text))
+            for key in _iter_section_keys(_LEGACY_SECTION_ORDER):
+                text = sections[key]
+                if section_cap > 0:
+                    text = text[:section_cap]
+                lines.append(_section_line(key, text))
         else:
             header = "\n".join(lines)
             used = estimate_tokens(header)
-            for key in _BUDGET_SECTION_PRIORITY:
-                if key not in sections:
-                    continue
+            for key in _iter_section_keys(_BUDGET_SECTION_PRIORITY):
                 text = sections[key]
                 if section_cap > 0:
                     text = text[:section_cap]
@@ -120,11 +134,39 @@ class PromptBuilder:
                 lines.append(candidate)
                 used += cost
 
+        knowledge_line = self._format_npc_knowledge(runtime.get("npc_knowledge"))
+        if knowledge_line:
+            lines.append(knowledge_line)
         if runtime.get("mood"):
             lines.append(f"Mood attuale: {runtime['mood']}")
         if runtime.get("relationship") is not None:
             lines.append(f"Relazione col giocatore: {runtime['relationship']}")
         return "\n".join(lines)
+
+    @staticmethod
+    def _format_npc_knowledge(raw: object) -> str | None:
+        if not raw:
+            return None
+        items: list[str] = []
+        if isinstance(raw, list):
+            for fact in raw:
+                if isinstance(fact, dict):
+                    fid = str(fact.get("id") or "").strip()
+                    summary = str(fact.get("summary") or "").strip()
+                    if fid and summary:
+                        items.append(f"{fid}: {summary}")
+                    elif summary:
+                        items.append(summary)
+                else:
+                    fid = str(getattr(fact, "id", "") or "").strip()
+                    summary = str(getattr(fact, "summary", "") or "").strip()
+                    if fid and summary:
+                        items.append(f"{fid}: {summary}")
+                    elif summary:
+                        items.append(summary)
+        if not items:
+            return None
+        return "Sa (questa partita):\n- " + "\n- ".join(items)
 
     def _tier_budget(self, tier: str) -> int:
         mapping = {

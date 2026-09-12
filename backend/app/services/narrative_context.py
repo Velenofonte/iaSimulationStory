@@ -16,7 +16,11 @@ from app.services.game_clock import format_label
 from app.services.narrative_stance import detect_stance
 from app.services.prompt_builder import PromptBuilder
 from app.services.save_manager import SaveManager
-from app.services.story_catalog import build_story_context
+from app.services.id_registry import build_known_ids
+from app.services.state_reducer import format_offscreen_lines
+from app.services.story_catalog import build_story_context, load_story_episode_prompt
+from app.services.episode_pack import load_episode_pack
+from app.services.notoriety import to_prompt_slice as notoriety_prompt_slice
 from app.services.token_estimate import estimate_tokens, fill_by_priority, fit_text
 from app.services.wiki_query import WikiQuery, build_world_excerpt
 from app.services.wiki_writer import WikiWriter
@@ -32,6 +36,8 @@ class NarrativeBudgetPolicy:
         if budget <= 0:
             return request
 
+        free_rules = request.story_rules or ""
+
         core = NarrativeRequest(
             canon_facts=request.canon_facts,
             active_arc=request.active_arc,
@@ -42,11 +48,23 @@ class NarrativeBudgetPolicy:
             player_action=request.player_action,
             stance=request.stance,
             story_context=request.story_context,
+            story_rules="",
+            episode=request.episode,
+            notoriety_slice="",
+            scale_bands=[],
+            thread_hint="",
         )
         used = estimate_tokens(core.model_dump_json())
         remaining = budget - used
         if remaining <= 0:
-            return core
+            return core.model_copy(
+                update={
+                    "story_rules": free_rules,
+                    "notoriety_slice": request.notoriety_slice,
+                    "scale_bands": list(request.scale_bands),
+                    "thread_hint": request.thread_hint,
+                }
+            )
 
         cards = fill_by_priority(
             list(request.character_cards),
@@ -98,6 +116,11 @@ class NarrativeBudgetPolicy:
             player_action=request.player_action,
             stance=request.stance,
             story_context=request.story_context,
+            story_rules="",
+            episode=request.episode,
+            notoriety_slice="",
+            scale_bands=[],
+            thread_hint="",
         )
         if estimate_tokens(probe.model_dump_json()) > budget and arc:
             overhead = estimate_tokens(probe.model_dump_json()) - estimate_tokens(arc)
@@ -114,6 +137,11 @@ class NarrativeBudgetPolicy:
             player_action=request.player_action,
             stance=request.stance,
             story_context=request.story_context,
+            story_rules=free_rules,
+            episode=request.episode,
+            notoriety_slice=request.notoriety_slice,
+            scale_bands=list(request.scale_bands),
+            thread_hint=request.thread_hint,
         )
 
 
@@ -148,6 +176,7 @@ class NarrativeContextAssembler:
         active_arcs: list[str],
         cards: list[str],
         card_ids: set[str],
+        render: bool = False,
     ) -> None:
         cid = (character_id or "").strip()
         if not cid:
@@ -160,12 +189,16 @@ class NarrativeContextAssembler:
             return
         runtime = state.characters.get(cid)
         runtime_dict = runtime.model_dump() if runtime else {}
-        cards.append(self.prompts.build_prompt_card(card, runtime_dict))
+        cards.append(self.prompts.build_prompt_card(card, runtime_dict, render=render))
         card_ids.add(str(card.id).lower())
         card_ids.add(key)
 
     def _build_character_cards(
-        self, state: GameState, active_arcs: list[str]
+        self,
+        state: GameState,
+        active_arcs: list[str],
+        *,
+        render: bool = False,
     ) -> tuple[list[str], set[str]]:
         """Player sheet first (always), then present NPCs."""
         cards: list[str] = []
@@ -177,6 +210,7 @@ class NarrativeContextAssembler:
             active_arcs=active_arcs,
             cards=cards,
             card_ids=card_ids,
+            render=render,
         )
         for character_id in state.characters_active:
             self._append_character_card(
@@ -185,6 +219,7 @@ class NarrativeContextAssembler:
                 active_arcs=active_arcs,
                 cards=cards,
                 card_ids=card_ids,
+                render=render,
             )
         return cards, card_ids
 
@@ -247,13 +282,16 @@ class NarrativeContextAssembler:
         spellbook = self._build_spellbook(raw_spells, user_message)
         chat_recent = self._compress_chat(recent)
         stance = detect_stance(user_message)
+        pack = load_episode_pack(state.story_id)
 
         request = NarrativeRequest(
             canon_facts=NarrativeCanonFacts(
                 location=state.player.location,
                 time=tempo,
                 present=list(state.characters_active),
+                offscreen=format_offscreen_lines(state),
                 situations=list(state.situations),
+                known_ids=build_known_ids(state),
                 extra=dict(state.extra),
             ),
             active_arc=arc_slice,
@@ -264,6 +302,9 @@ class NarrativeContextAssembler:
             player_action=user_message,
             stance=stance,
             story_context=build_story_context(state.story_id),
+            story_rules=load_story_episode_prompt(state.story_id),
+            notoriety_slice=notoriety_prompt_slice(state, pack),
+            scale_bands=list(pack.scale_bands.keys()),
         )
         trimmed = NarrativeBudgetPolicy.apply(request, settings.narrative_token_budget)
         extracted = self.wiki.extract_entities_from_text(user_message)
@@ -295,7 +336,7 @@ class NarrativeContextAssembler:
     def build_render_cards(self, state: GameState) -> list[str]:
         """Character cards for post-presence / post-clock render pass."""
         active_arcs = self._active_arc_ids(state)
-        cards, _ = self._build_character_cards(state, active_arcs)
+        cards, _ = self._build_character_cards(state, active_arcs, render=True)
         return cards
 
     def _build_spellbook(

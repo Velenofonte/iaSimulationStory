@@ -46,6 +46,61 @@ class WikiWriter:
             post.content = body
             path.write_text(frontmatter.dumps(post), encoding="utf-8")
 
+    def ensure_location(
+        self,
+        location_id: str,
+        *,
+        name: str | None = None,
+        kind: str = "default",
+        danger: str = "medium",
+        body: str | None = None,
+    ) -> Path:
+        """Create a minimal location stub if missing (runtime session wiki)."""
+        lid = (location_id or "").strip().lower().replace("_", "-")
+        if not lid:
+            raise ValueError("location_id required")
+        path = self.wiki_dir / "locations" / f"{lid}.md"
+        if path.exists():
+            return path
+        display = (name or lid.replace("-", " ").title()).strip()
+        metadata = {
+            "id": lid,
+            "name": display,
+            "type": "location",
+            "tier": "minimal",
+            "kind": (kind or "default").strip().lower() or "default",
+            "danger": (danger or "medium").strip().lower() or "medium",
+            "source": "runtime",
+        }
+        content = (body or "").strip() or (
+            f"# Descrizione\nLuogo emerso in sessione: {display}.\n\n"
+            f"# Ruolo\nContesto locale; da espandere in gioco.\n"
+        )
+        path.parent.mkdir(parents=True, exist_ok=True)
+        path.write_text(
+            frontmatter.dumps(frontmatter.Post(content if content.endswith("\n") else content + "\n", **metadata)),
+            encoding="utf-8",
+        )
+        self._add_index(lid, f"locations/{lid}.md")
+        return path
+
+    def list_location_ids(self) -> list[str]:
+        """Ids of location pages in the current wiki."""
+        folder = self.wiki_dir / "locations"
+        if not folder.is_dir():
+            return []
+        return sorted(p.stem for p in folder.glob("*.md"))
+
+    def write_notoriety_section(self, character_id: str, lines: list[str]) -> None:
+        """Replace the runtime-only # Notorieta section on a character sheet."""
+        path = self._character_path(character_id)
+        if not path.exists():
+            return
+        post = frontmatter.load(path)
+        value = "\n".join(f"- {line}" for line in lines) if lines else ""
+        post.content = self.set_section(post.content, "Notorieta", value)
+        path.write_text(frontmatter.dumps(post), encoding="utf-8")
+
     def apply_consolidation(self, result: ConsolidationReviewResult) -> None:
         for entity in result.create_entities:
             self.create_entity(entity)
@@ -72,8 +127,12 @@ class WikiWriter:
                 body = self._remove_section_lines(body, "Open threads", update.open_threads_remove)
             if update.open_threads_add:
                 body = self._append_section_lines(body, "Open threads", update.open_threads_add)
-            if update.relationship is not None:
-                body = self.set_section(body, "Relazione col giocatore", str(update.relationship))
+            if update.relationship is not None or update.relationship_summary_add:
+                body = self._merge_relationship_section(
+                    body,
+                    score=update.relationship,
+                    summary_add=list(update.relationship_summary_add or []),
+                )
             if update.promote_tier:
                 post.metadata["tier"] = update.promote_tier
             if update.location:
@@ -563,6 +622,56 @@ class WikiWriter:
                 continue
             merged = self._merge_bullet_list(merged, line)
         return self.set_section(body, section, "\n".join(f"- {line}" for line in merged))
+
+    def _merge_relationship_section(
+        self,
+        body: str,
+        *,
+        score: int | None = None,
+        summary_add: list[str] | None = None,
+    ) -> str:
+        """Merge score + dense encounter bullets into Relazione col giocatore."""
+        section = "Relazione col giocatore"
+        raw = self._get_section_raw(body, section)
+        existing_bullets = self.get_section(body, section)
+        current_score: int | None = None
+        for line in raw.splitlines():
+            stripped = line.strip()
+            if stripped.lower().startswith("punteggio:"):
+                try:
+                    current_score = int(stripped.split(":", 1)[1].strip())
+                except ValueError:
+                    pass
+                break
+            if stripped.isdigit():
+                current_score = int(stripped)
+                break
+
+        if score is not None:
+            current_score = int(score)
+
+        bullets = list(existing_bullets)
+        for line in summary_add or []:
+            if line.strip():
+                bullets = self._merge_bullet_list(bullets, line)
+
+        parts: list[str] = []
+        if current_score is not None:
+            parts.append(f"Punteggio: {current_score}")
+        if bullets:
+            parts.extend(f"- {b}" for b in bullets)
+        if not parts and score is not None:
+            parts.append(f"Punteggio: {score}")
+        return self.set_section(body, section, "\n".join(parts))
+
+    def _get_section_raw(self, body: str, section: str) -> str:
+        marker = f"# {section}"
+        if marker not in body:
+            return ""
+        part = body.split(marker, 1)[1]
+        next_hash = part.find("\n# ")
+        chunk = part if next_hash == -1 else part[:next_hash]
+        return chunk.strip()
 
     def _remove_section_lines(self, body: str, section: str, lines: list[str]) -> str:
         existing = self.get_section(body, section)

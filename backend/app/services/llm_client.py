@@ -40,6 +40,53 @@ def _is_openrouter_model(model: str) -> bool:
     return name.startswith("~") or "/" in name
 
 
+def _is_gpt56_luna(model: str) -> bool:
+    """openai/gpt-5.6-luna and -pro (OpenRouter slug or bare id)."""
+    name = model.strip().lower().lstrip("~").rsplit("/", 1)[-1]
+    return name.startswith("gpt-5.6-luna")
+
+
+def _json_schema_response_format(schema: type[BaseModel]) -> dict[str, Any]:
+    # strict false: TurnResolution uses dict[str, ...] (additionalProperties).
+    return {
+        "type": "json_schema",
+        "json_schema": {
+            "name": schema.__name__,
+            "strict": False,
+            "schema": schema.model_json_schema(),
+        },
+    }
+
+
+def _openai_chat_kwargs(
+    *,
+    model: str,
+    system: str,
+    user: str,
+    temperature: float,
+    max_output_tokens: int = 0,
+    response_schema: type[BaseModel] | None = None,
+) -> dict[str, Any]:
+    kwargs: dict[str, Any] = {
+        "model": model,
+        "messages": [
+            {"role": "system", "content": system},
+            {"role": "user", "content": user},
+        ],
+        "temperature": temperature,
+    }
+    if max_output_tokens > 0:
+        kwargs["max_tokens"] = max_output_tokens
+    extra_body: dict[str, Any] = {}
+    if _is_gpt56_luna(model):
+        extra_body["reasoning"] = {"effort": "none"}
+        if response_schema is not None:
+            kwargs["response_format"] = _json_schema_response_format(response_schema)
+    if extra_body:
+        kwargs["extra_body"] = extra_body
+    return kwargs
+
+
 class LLMClient:
     def __init__(self) -> None:
         self.last_usage: dict[str, Any] | None = None
@@ -88,6 +135,7 @@ class LLMClient:
         user: str,
         model: str | None = None,
         temperature: float = 0.8,
+        response_schema: type[BaseModel] | None = None,
     ) -> str:
         self.last_usage = None
         resolved_model = model or settings.llm_model_narrative
@@ -103,16 +151,14 @@ class LLMClient:
         client = self._client_for_model(resolved_model)
         if client is None:
             return self._mock_response(user)
-        kwargs: dict[str, Any] = {
-            "model": resolved_model,
-            "messages": [
-                {"role": "system", "content": system},
-                {"role": "user", "content": user},
-            ],
-            "temperature": temperature,
-        }
-        if settings.llm_max_output_tokens > 0:
-            kwargs["max_tokens"] = settings.llm_max_output_tokens
+        kwargs = _openai_chat_kwargs(
+            model=resolved_model,
+            system=system,
+            user=user,
+            temperature=temperature,
+            max_output_tokens=settings.llm_max_output_tokens,
+            response_schema=response_schema,
+        )
         response = client.chat.completions.create(**kwargs)
         self.last_usage = self._extract_usage(response)
         return response.choices[0].message.content or ""
@@ -193,7 +239,13 @@ class LLMClient:
         model: str | None = None,
         temperature: float = 0.2,
     ) -> T:
-        raw = self.complete(system=system, user=user, model=model, temperature=temperature)
+        raw = self.complete(
+            system=system,
+            user=user,
+            model=model,
+            temperature=temperature,
+            response_schema=schema,
+        )
         payload = self.extract_json(raw)
         return schema.model_validate(payload)
 

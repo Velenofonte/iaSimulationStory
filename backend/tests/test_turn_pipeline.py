@@ -14,6 +14,8 @@ def _session(tmp_path: Path, monkeypatch, fake_llm):
     from app.config import settings
 
     monkeypatch.setattr(settings, "project_root", tmp_path)
+    # Episodes would add non-deterministic resolver calls to the stubbed LLM queue.
+    monkeypatch.setattr(settings, "episode_engine_enabled", False)
     make_seed_story(tmp_path)
     saves = SaveManager(root=tmp_path / "saves")
     state = saves.create_session("Hero", start_location="e-rantel", story_id="overlord")

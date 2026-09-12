@@ -225,13 +225,20 @@ def test_spellbook_on_demand_full_when_cited(tmp_path: Path, monkeypatch) -> Non
 
 
 def test_global_budget_trims(tmp_path: Path, monkeypatch) -> None:
+    import json
+
     state, engine = _seed_session(tmp_path)
     monkeypatch.setattr(settings, "narrative_token_budget", 200)
     req = engine.build_request(
         state=state,
         user_message="guardo intorno lungamente e descrivo tutto",
     )
-    assert estimate_tokens(req.model_dump_json()) <= 280
+    # story_rules / scale_bands are pack metadata (system or opaque ids).
+    # known_ids lives in canon_facts (empty registry still costs a few tokens).
+    payload = json.loads(req.model_dump_json())
+    payload.pop("story_rules", None)
+    payload.pop("scale_bands", None)
+    assert estimate_tokens(json.dumps(payload, ensure_ascii=False)) <= 360
 
 
 def test_state_slice_smaller_than_full_dump(tmp_path: Path, monkeypatch) -> None:

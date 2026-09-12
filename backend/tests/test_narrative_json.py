@@ -119,7 +119,8 @@ def test_build_request_sections(tmp_path: Path, monkeypatch) -> None:
     req = engine.build_request(state=state, user_message="guardo intorno")
     assert isinstance(req, NarrativeRequest)
     assert req.canon_facts.location == "e-rantel"
-    assert "fumo all'orizzonte" in req.canon_facts.situations
+    assert any(s.summary == "fumo all'orizzonte" for s in req.canon_facts.situations)
+    assert req.canon_facts.known_ids["situations"]
     assert req.player_action == "guardo intorno"
     payload = req.model_dump()
     assert "canon_facts" in payload

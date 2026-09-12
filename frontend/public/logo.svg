@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" role="img" aria-label="Overlord">
+  <rect width="512" height="512" fill="#161412"/>
+  <circle cx="256" cy="256" r="188" fill="#1e1b19"/>
+  <circle cx="256" cy="256" r="176" fill="none" stroke="#3d3733" stroke-width="6"/>
+  <path fill="#a35d58" d="M256 118c-6 28-10 52-10 78 0 22 3 40 10 58 7-18 10-36 10-58 0-26-4-50-10-78z"/>
+  <path fill="#d5cdc4" d="M168 214c36-18 62-22 88-22v148c-30 0-58 6-88 24V214z"/>
+  <path fill="#b7aea4" d="M344 214c-36-18-62-22-88-22v148c30 0 58 6 88 24V214z"/>
+  <path fill="none" stroke="#8a4a46" stroke-width="5" stroke-linecap="round" d="M256 192v148"/>
+  <circle cx="256" cy="176" r="10" fill="#a35d58"/>
+  <path fill="none" stroke="#958a80" stroke-width="4" stroke-linecap="round" d="M196 248h36M196 276h28M196 304h32M316 248h-36M316 276h-28M316 304h-32"/>
+</svg>
