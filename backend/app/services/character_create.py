@@ -9,7 +9,7 @@ import frontmatter
 from app.config import settings
 from app.services.character_sheet_normalize import normalize_character_body
 from app.services.llm_client import LLMClient
-from app.services.story_catalog import build_story_context
+from app.services.story_catalog import build_story_context, load_story_ingest_prompt
 from app.services.wiki_writer import WikiWriter
 
 
@@ -119,6 +119,12 @@ def generate_custom_player_sheet(
 ) -> tuple[dict, str]:
     cid = (character_id or WikiWriter.player_id(name)).strip()
     system = llm.load_prompt("character_create")
+    story_rules = load_story_ingest_prompt(story_id)
+    if story_rules:
+        system = (
+            f"{system.rstrip()}\n\n"
+            f"## Regole aggiuntive della storia\n{story_rules}\n"
+        )
     context = build_story_context(story_id)
     user = (
         f"STORY_CONTEXT:\n{context or '(nessuno)'}\n\n"

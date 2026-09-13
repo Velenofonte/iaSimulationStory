@@ -70,3 +70,39 @@ def test_retry_without_thread_keeps_first_resolution() -> None:
     out = TurnResolver(llm=stub).resolve(_request(4))
     assert out.situations_add == []
     assert len(stub.systems) == 2
+
+
+def test_travel_without_location_is_retried() -> None:
+    stub = _StubLLM(
+        [
+            _resolution(),
+            TurnResolution(
+                time=NarrativeTime(bucket="breve", minutes=30),
+                location="rovine-sud",
+                scene_brief=["il gruppo arriva alle rovine"],
+            ),
+        ]
+    )
+    req = _request(0)
+    req.player_action = "Si sono pronto partiamo pure e mi avvio"
+    out = TurnResolver(llm=stub).resolve(req)
+    assert out.location == "rovine-sud"
+    assert len(stub.systems) == 2
+    assert "location" in stub.systems[1]
+
+
+def test_travel_with_location_is_not_retried() -> None:
+    stub = _StubLLM(
+        [
+            TurnResolution(
+                time=NarrativeTime(bucket="breve", minutes=20),
+                location="gilda-avventurieri",
+                scene_brief=["arrivo in gilda"],
+            )
+        ]
+    )
+    req = _request(0)
+    req.player_action = "Mi dirigo alla sede della gilda"
+    out = TurnResolver(llm=stub).resolve(req)
+    assert out.location == "gilda-avventurieri"
+    assert len(stub.systems) == 1

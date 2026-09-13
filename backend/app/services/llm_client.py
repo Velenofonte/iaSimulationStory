@@ -10,6 +10,8 @@ from app.config import settings
 
 T = TypeVar("T", bound=BaseModel)
 
+_LLM_TIMEOUT_S = 90.0
+
 _GEMINI_SAFETY_SETTINGS = [
     types.SafetySetting(
         category=types.HarmCategory.HARM_CATEGORY_HARASSMENT,
@@ -46,6 +48,16 @@ def _is_gpt56_luna(model: str) -> bool:
     return name.startswith("gpt-5.6-luna")
 
 
+def _is_deepseek_model(model: str) -> bool:
+    slug = model.strip().lower().lstrip("~")
+    return slug.startswith("deepseek/") or slug.startswith("deepseek-")
+
+
+def _should_disable_reasoning(model: str) -> bool:
+    # Luna defaults to medium thinking; DeepSeek V4 thinking-on returns empty content.
+    return _is_gpt56_luna(model) or _is_deepseek_model(model)
+
+
 def _json_schema_response_format(schema: type[BaseModel]) -> dict[str, Any]:
     # strict false: TurnResolution uses dict[str, ...] (additionalProperties).
     return {
@@ -78,13 +90,63 @@ def _openai_chat_kwargs(
     if max_output_tokens > 0:
         kwargs["max_tokens"] = max_output_tokens
     extra_body: dict[str, Any] = {}
-    if _is_gpt56_luna(model):
-        extra_body["reasoning"] = {"effort": "none"}
-        if response_schema is not None:
+    if _should_disable_reasoning(model):
+        extra_body["reasoning"] = {"enabled": False, "effort": "none"}
+        extra_body["reasoning_effort"] = "none"
+        extra_body["thinking"] = {"type": "disabled"}
+    if response_schema is not None:
+        if _is_gpt56_luna(model):
             kwargs["response_format"] = _json_schema_response_format(response_schema)
+        elif _is_deepseek_model(model):
+            # json_object is widely supported; json_schema 400s on some V4 hosts.
+            kwargs["response_format"] = {"type": "json_object"}
+    if _is_openrouter_model(model):
+        provider: dict[str, Any] = {"sort": "latency"}
+        if _is_gpt56_luna(model):
+            # Flex is ~6s TTFT; Bedrock/standard OpenAI are much faster.
+            provider["ignore"] = ["OpenAI Flex"]
+        extra_body["provider"] = provider
     if extra_body:
         kwargs["extra_body"] = extra_body
     return kwargs
+
+
+def _message_text(message: Any) -> str:
+    """Prefer visible content; DeepSeek thinking often leaves content empty."""
+    content = getattr(message, "content", None)
+    if isinstance(content, str) and content.strip():
+        return content
+    if isinstance(content, list):
+        parts: list[str] = []
+        for item in content:
+            if isinstance(item, str) and item.strip():
+                parts.append(item)
+            elif isinstance(item, dict):
+                text = item.get("text") or item.get("content") or ""
+                if text:
+                    parts.append(str(text))
+            else:
+                text = getattr(item, "text", None) or getattr(item, "content", None)
+                if text:
+                    parts.append(str(text))
+        joined = "".join(parts).strip()
+        if joined:
+            return joined
+    for attr in ("reasoning_content", "reasoning"):
+        val = getattr(message, attr, None)
+        if isinstance(val, str) and val.strip():
+            return val
+    parsed = getattr(message, "parsed", None)
+    if parsed is not None:
+        if isinstance(parsed, str) and parsed.strip():
+            return parsed
+        try:
+            dumped = json.dumps(parsed, ensure_ascii=False)
+        except TypeError:
+            dumped = ""
+        if dumped and dumped not in ("null", "{}"):
+            return dumped
+    return content if isinstance(content, str) else ""
 
 
 class LLMClient:
@@ -98,12 +160,17 @@ class LLMClient:
             kwargs: dict[str, Any] = {}
             if getattr(settings, "llm_api_base_url", None):
                 kwargs["base_url"] = settings.llm_api_base_url
-            self._openai_client = OpenAI(api_key=settings.openai_api_key, **kwargs)
+            self._openai_client = OpenAI(
+                api_key=settings.openai_api_key,
+                timeout=_LLM_TIMEOUT_S,
+                **kwargs,
+            )
 
         if settings.openrouter_api_key:
             self._openrouter_client = OpenAI(
                 api_key=settings.openrouter_api_key,
                 base_url=settings.openrouter_api_base_url or "https://openrouter.ai/api/v1",
+                timeout=_LLM_TIMEOUT_S,
                 default_headers={
                     "HTTP-Referer": "https://github.com/wiki-overlord",
                     "X-Title": "Wiki Overlord",
@@ -122,11 +189,36 @@ class LLMClient:
             or self._gemini_native is not None
         )
 
+    # Shared fragments appended after the parent prompt (order matters).
+    _PROMPT_SHARED: dict[str, tuple[str, ...]] = {
+        "turn_resolve": (
+            "player_action_grammar",
+            "npc_epistemic",
+            "id_registry",
+        ),
+        "narrative_render": (
+            "player_action_grammar",
+            "npc_epistemic",
+        ),
+        "review_present": ("id_registry",),
+    }
+
     def load_prompt(self, name: str) -> str:
+        """Load a system prompt, composing optional `_shared/` fragments."""
+        return self.compose_prompt(name)
+
+    def compose_prompt(self, name: str) -> str:
+        """Parent markdown + shared fragments for that prompt name."""
         path = settings.prompts_dir / f"{name}.md"
         if not path.exists():
             return ""
-        return path.read_text(encoding="utf-8")
+        parts = [path.read_text(encoding="utf-8").rstrip()]
+        shared_dir = settings.prompts_dir / "_shared"
+        for frag in self._PROMPT_SHARED.get(name, ()):
+            frag_path = shared_dir / f"{frag}.md"
+            if frag_path.exists():
+                parts.append(frag_path.read_text(encoding="utf-8").rstrip())
+        return "\n\n".join(parts) + "\n"
 
     def complete(
         self,
@@ -161,7 +253,15 @@ class LLMClient:
         )
         response = client.chat.completions.create(**kwargs)
         self.last_usage = self._extract_usage(response)
-        return response.choices[0].message.content or ""
+        message = response.choices[0].message
+        text = _message_text(message)
+        if not (text or "").strip():
+            finish = getattr(response.choices[0], "finish_reason", None)
+            print(
+                f"[llm] empty content model={resolved_model} finish={finish!r} "
+                f"schema={response_schema.__name__ if response_schema else None}"
+            )
+        return text or ""
 
     def _client_for_model(self, model: str) -> OpenAI | None:
         if _is_openrouter_model(model):

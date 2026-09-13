@@ -7,15 +7,12 @@ import re
 from app.models.game_state import GameState, NpcKnowledgeFact, slugify_fact_id
 from app.models.narrative import Episode
 from app.models.turn import TurnResolution
+from app.services.places import is_travel_intent
 
 SITUATIONS_CAP = 6
 _BRIEF_MAX = 280
 _JOIN_BRIEF_MAX = 160
 
-_EXIT_RE = re.compile(
-    r"\b(?:vado|parto|partiamo|mi\s+incammino|me\s+ne\s+vado|lascio|abbandono)\b",
-    re.IGNORECASE,
-)
 _OPENING_HINT_RE = re.compile(
     r"\b(?:medaglione|messaggio|mistero|oggetto|figura|creatura|prigionier|"
     r"minaccia|patto|accordo|incarico|consegna)\w*\b",
@@ -151,7 +148,7 @@ def _cap_situations(resolution: TurnResolution, state: GameState) -> TurnResolut
 def is_exit_intent(player_action: str, *, location_changed: bool) -> bool:
     if location_changed:
         return True
-    return bool(_EXIT_RE.search(player_action or ""))
+    return is_travel_intent(player_action)
 
 
 def ensure_exit_threads(

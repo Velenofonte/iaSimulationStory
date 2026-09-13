@@ -8,6 +8,7 @@ from app.models import (
 )
 from app.services.front_engine import FrontEngine
 from app.services.llm_client import LLMClient
+from app.services.places import infer_location_kind, normalize_place_id
 from app.services.save_manager import SaveManager
 from app.services.state_reducer import apply_scene_delta, present_review_to_delta
 from app.services.token_estimate import estimate_prompt_tokens
@@ -114,45 +115,23 @@ class ConsequenceEngine:
             f"(id validi: {', '.join(locations)})" if locations
             else "(usa l'id gia' presente in game_state se non cambia)"
         )
+        situations_block = (
+            "\n".join(f"- {s.id}: {s.summary}" for s in state.situations) or "(nessuna)"
+        )
+        knowledge_lines: list[str] = []
+        for cid, runtime in state.characters.items():
+            if not runtime or not runtime.npc_knowledge:
+                continue
+            facts = "; ".join(f"{f.id}: {f.summary}" for f in runtime.npc_knowledge)
+            knowledge_lines.append(f"- {cid}: {facts}")
+        knowledge_block = "\n".join(knowledge_lines) or "(nessuna)"
         return (
             f"GAME STATE ATTUALE:\n{self._format_game_state(state)}\n\n"
+            f"SITUATIONS ATTUALI (id: summary):\n{situations_block}\n\n"
+            f"NPC_KNOWLEDGE RUNTIME (known_ids):\n{knowledge_block}\n\n"
             f"CONVERSAZIONE RECENTE:\n{transcript}\n\n"
-            "Restituisci JSON conforme a PresentReviewResult.\n"
-            f"player_location: aggiorna SE il luogo fisico e' cambiato {locations_hint}.\n"
-            "characters_active: OBBLIGATORIO SEMPRE — lista COMPLETA sostitutiva "
-            "di chi e' FISICAMENTE presente ORA (solo NPC; MAI il PG/id/nome/player); "
-            "[] se solo; mai omettere. Se player_location e' cambiato, rivaluta da zero: "
-            "togli gli NPC del luogo lasciato; tieni solo chi e' al nuovo posto "
-            "(o compagni in viaggio col PG).\n"
-            "present_leave: per ogni NPC che NON e' piu' in characters_active ma resta "
-            "richiamabile (altra stanza, incarico vicino, e' andato in citta'): "
-            '{ "npc_id": {"where": "...", "reason": "..."} }. '
-            "Il codice manda offscreen anche chi sparisce dalla lista senza voce esplicita, "
-            "ma preferisci motivi chiari.\n"
-            "situations = memoria a MEDIO termine: fatti ancora veri e rilevanti "
-            "per le prossime scene (viaggio in corso, voci/minacce aperte, accordi, "
-            "tensioni locali, stato albo/missioni/registri: chi iscritto, posti liberi).\n"
-            "Includi una situation SOLO SE: nelle prossime 2-3 scene un NPC, documento "
-            "o evento potrebbe fare riferimento a questo fatto, e se mancasse la scena "
-            "risulterebbe incoerente (es. un NPC che 'dimentica' di essere gia' arruolato).\n"
-            "ESEMPI DA INCLUDERE: '[NPC] si e' unito al gruppo diretto a [luogo], "
-            "partenza tra [tempo]' / 'Il player ha promesso a [NPC] di procurargli [oggetto]' / "
-            "'[N] posti liberi nel registro di [organizzazione]'.\n"
-            "ESEMPI DA NON INCLUDERE: saluti, micro-gesti, fatti statici di lore non "
-            "legati a uno sviluppo di trama.\n"
-            "Mantieni le situations attive tra 1 e 6; se superi, consolida o rimuovi "
-            "prima di aggiungere.\n"
-            "situations_add: aggiungi fili aperti utili incluso stato missioni; "
-            "situations_remove: togli solo risolti/stale/rumore — NON togliere "
-            "iscrizioni/registri aperti solo perche' dettagliati.\n"
-            "npc_knowledge_upsert: riusa id da known_ids / Sa (questa partita) per "
-            "aggiornare summary; crea id nuovi solo per fatti nuovi. Formato "
-            '{ "npc_id": [{"id": "slug", "summary": "..."}] }. '
-            "NON copiare situations su tutti i presenti. Se incerto, {}.\n"
-            "front_impacts: solo strato 2 (null|distort|block + intent_id) se serve.\n"
-            "Se player_location e' un id NON tra i location id validi sopra, includilo "
-            "comunque in player_location e in location_updates[<id>] con almeno objects "
-            "e/o events: il codice creera' una scheda stub (kind/danger) per il motore episodi.\n"
+            f"LOCATION ID VALIDI: {locations_hint}\n\n"
+            "Applica il system prompt. Restituisci JSON PresentReviewResult."
         )
     def _build_consolidation_user(
         self,
@@ -187,55 +166,17 @@ class ConsequenceEngine:
             f"PLAYER_NAME: {state.player.name}\n"
             f"PLAYER_LOCATION_WIKI: {sheet.get('location') or state.player.location}\n"
             f"PLAYER_LOCATION_STATE: {state.player.location}\n\n"
-            f"SITUATIONS ATTUALI (candidati a promozione o state_cleanup):\n{situations_block}\n\n"
-            f"NPC_KNOWLEDGE RUNTIME (fatti per-NPC da comprimere in Relazione):\n{knowledge_block}\n\n"
-            f"OPEN THREADS ATTUALI (usa queste stringhe esatte in open_threads_remove):\n{threads_block}\n\n"
-            f"MEMORIE ATTUALI (usa queste stringhe esatte in memories_remove; non riduplicarle):\n{memories_block}\n\n"
+            f"SITUATIONS ATTUALI (id: summary; candidati a promozione o state_cleanup):\n"
+            f"{situations_block}\n\n"
+            f"NPC_KNOWLEDGE RUNTIME (fatti per-NPC da comprimere in Relazione):\n"
+            f"{knowledge_block}\n\n"
+            f"OPEN THREADS ATTUALI (stringhe esatte per open_threads_remove):\n"
+            f"{threads_block}\n\n"
+            f"MEMORIE ATTUALI (stringhe esatte per memories_remove):\n"
+            f"{memories_block}\n\n"
             f"GAME STATE ATTUALE:\n{self._format_game_state(state)}\n\n"
             f"CONVERSAZIONE RECENTE:\n{transcript}\n\n"
-            "Sei nel passaggio da memoria a MEDIO termine (situations, volatile) a memoria "
-            "a LUNGO termine (wiki, permanente). Ogni situation attuale ha tre destini "
-            "possibili: (a) promossa in wiki se ha ancora valore permanente, (b) scartata "
-            "con state_cleanup se risolta/assorbita, (c) lasciata in situations se ancora "
-            "aperta e non abbastanza matura per la promozione.\n\n"
-            f"DEVI aggiornare character_updates['{player_id}'] con:\n"
-            "- memories_add: SOLO se tra 10+ scene questo fatto potrebbe ancora servire a "
-            "definire chi e' il personaggio o cosa gli e' successo (background permanente, "
-            "non cronaca). Test: 'se sparisse, il personaggio perderebbe un pezzo della sua "
-            "storia?'. Se la risposta e' no, non e' una memoria.\n"
-            "  INCLUDI: '[Il player] ha ottenuto [titolo/oggetto/status permanente] da [fonte]' "
-            "/ '[Il player] ha causato/subito [evento con conseguenze durature]'.\n"
-            "  NON INCLUDERE: log di azioni (cast, attacchi, spostamenti), riflessioni "
-            "momentanee, micro-eventi senza conseguenze. Massimo poche voci dense per "
-            "consolidamento — se stai aggiungendo piu' di 2-3 memorie, probabilmente stai "
-            "loggando invece di ricordando.\n"
-            "- memories_remove: per voci granulari o duplicate rispetto a quelle nuove.\n"
-            "- spells_add: nuove abilita' apprese (finisce nello spellbook del player, non "
-            "nella scheda).\n"
-            "- open_threads_add/remove: se situations o la chat mostrano missioni, "
-            "appuntamenti, accordi o compagni NON chiusi, DEVI metterli in "
-            "open_threads_add (agenda del PG in wiki). Non lasciare Open threads "
-            "vuoti in quel caso. Chiudi con open_threads_remove solo fili risolti "
-            "(stringhe esatte sopra).\n"
-            "- location: aggiorna se il player si e' spostato stabilmente.\n"
-            "- memories_add: NON inventare titoli/status non assegnati in chat "
-            "(iscriversi a una missione != ottenere un titolo).\n\n"
-            "Per ogni NPC con npc_knowledge rilevante (non il PG), aggiorna "
-            "character_updates[<npc_id>].relationship_summary_add con 1-2 voci dense "
-            "('cosa abbiamo vissuto insieme'): comprimi start/incidente/fine in poche "
-            "frasi; NON loggare ogni turno; NON duplicare le Memorie del PG. "
-            "Opzionale: relationship (punteggio intero) se la chat mostra un cambio chiaro.\n\n"
-            "Se una situation risolta ha lasciato segni su luoghi, fazioni o comunita' "
-            "(non sul singolo player), promuovila in location_updates o world_updates "
-            "(events_add, tensions_add, sections_add) invece che nelle memorie del player. "
-            "sections_add puo' creare sezioni wiki nuove se serve un contenitore che non "
-            "esiste ancora.\n\n"
-            "NON scrivere nella chat.\n\n"
-            "state_cleanup: stringhe ESATTE da SITUATIONS ATTUALI da rimuovere dal game_state "
-            "dopo la promozione (risolte, assorbite in wiki, o diventate rumore); [] se "
-            "nessuna. Una situation non promossa e non risolta resta in situations — non "
-            "va in state_cleanup solo perche' e' vecchia.\n\n"
-            "Restituisci JSON ConsolidationReviewResult."
+            "Applica il system prompt. Restituisci JSON ConsolidationReviewResult."
         )
 
     def run_present_review(self, state: GameState) -> PresentReviewResult | None:
@@ -286,26 +227,10 @@ class ConsequenceEngine:
             lid = str(raw_id or "").strip()
             if not lid or lid.startswith("_"):
                 continue
-            norm = lid.lower().replace("_", "-")
+            norm = normalize_place_id(lid) or lid.lower().replace("_", "-")
             if lid in known or norm in known:
                 continue
-            kind = "default"
-            danger = "medium"
-            lower = norm
-            # Inhabited places win over biome words: "avamposto-bosco-silente" is an
-            # outpost in a forest, not wilderness.
-            if any(x in lower for x in ("locanda", "inn", "taverna", "osteria")):
-                kind, danger = "inn", "low"
-            elif any(x in lower for x in ("avamposto", "outpost", "fortino")):
-                kind, danger = "outpost", "medium"
-            elif any(x in lower for x in ("citta", "city", "villaggio", "piazza", "gilda")):
-                kind, danger = "settlement", "low"
-            elif any(x in lower for x in ("rovina", "ruin", "cava", "tomba")):
-                kind, danger = "ruin", "high"
-            elif any(x in lower for x in ("strada", "road", "sentiero", "via")):
-                kind, danger = "road", "medium"
-            elif any(x in lower for x in ("bosco", "forest", "wilderness", "deserto")):
-                kind, danger = "wilderness", "high"
+            kind, danger = infer_location_kind(norm)
             try:
                 self.wiki_writer.ensure_location(norm, kind=kind, danger=danger)
                 known.add(norm)

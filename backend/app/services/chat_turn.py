@@ -86,7 +86,11 @@ def apply_narration_to_state(state: GameState, narr_result: NarrativeReply) -> N
     )
     apply_scene_delta(
         state,
-        resolution_to_delta(resolution, previous_location=state.player.location),
+        resolution_to_delta(
+            resolution,
+            previous_location=state.player.location,
+            previous_present=list(state.characters_active),
+        ),
     )
 
 

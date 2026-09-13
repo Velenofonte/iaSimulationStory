@@ -198,6 +198,38 @@ def test_resolution_propagates_npc_knowledge() -> None:
     assert delta.npc_knowledge_upsert["kael"][0].id == "quest_wolves_start"
 
 
+def test_npc_knowledge_upsert_drops_npcs_not_in_cast() -> None:
+    res = TurnResolution(
+        time=NarrativeTime(bucket="istantanea", minutes=3),
+        present=["doran"],
+        npc_knowledge_upsert={
+            "doran": [{"id": "vena", "summary": "Vena sotto le pietre"}],
+            "impiegato-gilda": [{"id": "vena", "summary": "Vena sotto le pietre"}],
+        },
+    )
+    delta = resolution_to_delta(res, previous_present=["doran", "kaelen"])
+    assert "doran" in delta.npc_knowledge_upsert
+    assert "impiegato-gilda" not in delta.npc_knowledge_upsert
+
+
+def test_npc_knowledge_dropped_on_move_when_present_omitted() -> None:
+    res = TurnResolution(
+        time=NarrativeTime(bucket="breve", minutes=30),
+        location="gilda-avventurieri",
+        present=None,
+        npc_knowledge_upsert={
+            "doran": [{"id": "x", "summary": "il party non e' in gilda"}],
+        },
+    )
+    delta = resolution_to_delta(
+        res,
+        previous_location="rovine-sud",
+        previous_present=["doran"],
+    )
+    assert delta.characters_active == []
+    assert delta.npc_knowledge_upsert == {}
+
+
 def test_present_review_can_update_existing_npc_knowledge() -> None:
     state = GameState(
         session_id="s",

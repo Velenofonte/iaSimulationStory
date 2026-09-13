@@ -164,6 +164,10 @@ function CollapsibleBlock({
   );
 }
 
+function isTouchDevice(): boolean {
+  return typeof window !== "undefined" && window.matchMedia("(pointer: coarse)").matches;
+}
+
 function turnsLeft(everyN: number, since: number): number {
   return Math.max(0, everyN - since);
 }
@@ -841,6 +845,7 @@ function App() {
           >
             Crea personaggio
           </button>
+          <PwaInstall />
           <section className="saves">
             <h2>Avventure precedenti</h2>
             {saves.length === 0 ? (
@@ -873,7 +878,6 @@ function App() {
             )}
           </section>
           {error && <p className="error">{error}</p>}
-          <PwaInstall />
         </div>
       </div>
     );
@@ -1115,11 +1119,13 @@ function App() {
             onChange={(e) => setInput(e.target.value)}
             onFocus={() => setPanelOpen(false)}
             onKeyDown={(e) => {
+              if (isTouchDevice()) return;
               if (e.key === "Enter" && !e.shiftKey) {
                 e.preventDefault();
                 handleSend();
               }
             }}
+            enterKeyHint={isTouchDevice() ? "enter" : "send"}
             placeholder="Cosa fai?"
             rows={2}
             disabled={waitingReply}

@@ -1,128 +1,91 @@
-Analizza la conversazione recente e il game state.
+Analizza conversazione recente e game state. Riconcilia chat ↔ state (memoria a medio termine). Non promuovere in wiki (quello e' consolidamento). Non riscrivere il turno appena risolto salvo contraddizione chiara in chat.
 
-OBIETTIVO
-Estrarre cosa e' vero ADESSO nel presente (memoria a medio termine).
-Questa review riconcilia chat <-> state, correggendo dati stale o rumorosi.
-Non riscrivere il turno appena risolto salvo contraddizione chiara nella chat.
-Non promuovere nulla in wiki: quello e' compito della consolidation review.
+## Input
 
-REGOLE GENERALI
-- La chat batte il game state quando sono in conflitto.
+Nel messaggio user: GAME STATE, CONVERSAZIONE RECENTE, hint su location id validi.
+
+## Output
+
+SOLO JSON valido `PresentReviewResult` (niente testo fuori):
+```json
+{
+  "player_location": null,
+  "characters_active": ["kael"],
+  "character_updates": {},
+  "location_updates": {},
+  "situations_add": [
+    { "id": "quest_wolves", "summary": "Missione lupi all'alba; Kael iscritto" }
+  ],
+  "situations_remove": ["shopping_herbs"],
+  "npc_knowledge_upsert": {
+    "kael": [{ "id": "quest_wolves", "summary": "Missione lupi all'alba col PG" }]
+  },
+  "present_leave": {
+    "lizzie-bareare": { "where": "bottega", "reason": "tornata al bancone" }
+  },
+  "front_impacts": [],
+  "extra_set": {},
+  "extra_remove": [],
+  "confidence": "medium"
+}
+```
+
+## Procedure
+
+### Regole generali
+- Fatti gia' accaduti: la chat batte il game state.
+- Presenza fisica e luogo del PG: `characters_active` e `player_location` seguono **dove e' il PG ORA** (ultime azioni del PG), non la prosa dell'ultimo assistant se contraddice il cast o il filo in corso.
 - Non creare chiavi per fatti non ancora accaduti.
-- Non inventare titoli, cariche, stati politici o entita' non emersi in chat.
+- Non inventare titoli, cariche, entita' non emerse in chat.
 
----
+### player_location
+Obbligatorio SE il PG ha cambiato posto. Dove e' FISICAMENTE ORA (id wiki noti o slug descrittivo).
+Prendi il posto dall'azione del PG, non da un NPC che parla in chat se `characters_active` e' altrove.
+VIETATO usare un id di fazione (`adventurers-guild`) al posto di un luogo (`gilda-avventurieri`).
 
-PLAYER_LOCATION
-Obbligatorio SE il giocatore ha cambiato posto rispetto al game state.
-- Indica dove si trova FISICAMENTE ORA nella scena attuale, non la citta' di partenza.
-- Usa id wiki gia' noti in chat/state; se non esistono, usa uno slug descrittivo.
-- Se la chat mostra un luogo diverso da quello nello state, aggiorna: non lasciare lo slug vecchio.
+### characters_active
+OBBLIGATORIO ogni review (mai omesso, mai null): lista COMPLETA sostitutiva di chi e' fisicamente col PG. `[]` se solo.
+- Solo NPC/ruoli terzi; VIETATO il PG.
+- Se location cambiata: rivaluta da zero (togli NPC del luogo lasciato).
+- Anche senza cambio luogo: togli chi e' andato altrove.
 
-CHARACTERS_ACTIVE
-Obbligatorio in OGNI review, mai omesso, mai null.
-- Lista COMPLETA e SOSTITUTIVA di chi e' fisicamente presente ORA con il PG.
-- [] se il PG e' solo. Correggi presenze rimaste stale dal turno precedente.
-- Usa id wiki se noti; altrimenti ruoli gia' emersi in chat. Mai inventare nomi propri.
-- VIETATO includere il PG stesso (id, nome, "player"): sono solo NPC / ruoli terzi.
-- Se player_location e' cambiato rispetto allo state: rivaluta da zero. Gli NPC del
-  luogo lasciato NON restano in lista. Metti solo chi e' al nuovo posto (o compagni
-  che viaggiano col PG). Esempio: uscito dalla bottega → togli l'alchimista.
-- Anche SENZA cambio luogo: togli chi e' andato in un'altra stanza, via in citta',
-  o non e' piu' col PG. Non lasciare stale cast.
+### present_leave
+Per ogni NPC tolto da `characters_active` ma ancora richiamabile: `{ "npc_id": { "where": "...", "reason": "..." } }`.
 
-PRESENT_LEAVE
-- Per ogni NPC tolto da characters_active ma ancora richiamabile dalla narrazione,
-  emetti present_leave: { "npc_id": { "where": "...", "reason": "..." } }.
-- where/reason spiegano dove e' e perche' (es. retrobottega / a cercare un tome).
-- Il codice manda offscreen anche chi sparisce dalla lista senza voce esplicita;
-  preferisci comunque motivi chiari. Controlla characters_offscreen nello state.
+### situations (fili medi)
+Test di inclusione: nelle prossime 2–3 scene un NPC/documento/evento potrebbe riferirsi a questo fatto? Se mancasse, scena incoerente? Se si a entrambe → mantieni/aggiungi.
 
----
+- `situations_add`: `[{ "id": "...", "summary": "..." }]`. Stesso id = aggiorna summary.
+  - SI: viaggio, voci/minacce aperte, accordi, tensioni, stato albo/missioni/registri.
+  - NO: gesti isolati, tono, fatti chiusi, catastrofi da wiki (al massimo riga sintetica se ancora locali).
+- Cap: max **6** situations attive; oltre, consolida voci simili prima di aggiungere.
+- `situations_remove`: lista di **id** (non summary) da chiudere. NON rimuovere registri aperti solo perche' dettagliati.
 
-SITUATIONS — memoria a medio termine
+### npc_knowledge_upsert
+`{ "npc_id": [{ "id": "slug", "summary": "..." }] }`. Riusa id; non copiare situations su tutti i presenti. Se incerto: `{}`.
 
-Cosa sono: fatti ancora veri e rilevanti per le prossime scene — contesto aperto,
-tensioni locali, obiettivi in corso, voci credute, relazioni o scenari non risolti,
-stato di albi/registri/missioni/accordi (chi e' iscritto, posti liberi, requisiti).
+### character_updates / location_updates
+Solo se servono. `location_updates`: id → `{ atmosphere?, objects?, events? }` con `objects`/`events` = **liste di stringhe** (mai dict). Non chiave top-level "atmosfera".
 
-Cosa NON sono: non e' il canone di lungo periodo (quello va in wiki, tramite
-consolidamento), e non e' un log di ogni micro-azione.
+### extra_set / extra_remove
+Solo chiavi strutturate non previste altrove. Non sovrascrivere campi fissi dello schema.
 
-TEST DI INCLUSIONE (usalo sia per aggiungere che per rimuovere):
-Nelle prossime 2-3 scene, un NPC, documento o evento potrebbe fare riferimento a
-questo fatto? Se mancasse, la scena risulterebbe incoerente (es. un NPC che
-"dimentica" di essere gia' iscritto a qualcosa)? Se si a entrambe → includi/mantieni.
-Se no → non aggiungere, o rimuovi se gia' presente.
+### front_impacts
+Solo strato 2: `null` | `distort` | `block` + `intent_id` + `front_id`.
+Esempio: `{"front_id": "carne_arc", "intent_id": "raid_locale", "effect": "distort", "evidence": "..."}`.
+Non usare per piani di arco globali. Non aggiornare day/minutes/time.
 
-situations_add — includi se superano il test sopra, per esempio:
-- viaggio o permanenza in corso con peso narrativo ("in viaggio verso [luogo]",
-  "ospite presso [luogo/gruppo]")
-- voci o minacce locali aperte; incarichi, promesse, accordi non ancora chiusi
-- tensione sociale attiva (diffidenza, allarme) che condiziona le scelte presenti
-- stato di albo/gilda/missioni: iscrizioni, posti richiesti vs occupati, nomi gia'
-  sul registro, requisiti ancora aperti
-  Esempio: "Missione [nome]: [NPC A] gia' iscritto; servono altri 2 partecipanti"
+## Priorita' in conflitto
 
-situations_add — NON includere:
-- gesti o battute isolate senza conseguenza ("ha salutato", "ha annuito")
-- riflessioni interne o tono momentaneo del personaggio
-- fatti gia' chiusi nella stessa scena
-- eventi storici di grande portata da promuovere in wiki (distruzioni, morti di
-  massa, cambi di reputazione stabili) — al massimo una riga sintetica se ancora
-  rilevanti al presente locale, altrimenti lasciali al consolidamento
+1. Fatti accaduti: chat batte game state.
+2. Luogo e cast fisici: ultime azioni del PG + `characters_active` coerenti col luogo ORA; non riportare il PG in un posto solo perche' un NPC parla in chat.
+3. Registro ID: riusa id esistenti (vedi sezione concatenata).
 
-LIMITE: mantieni le situations attive indicativamente tra 5 e 12. Se il numero
-cresce oltre, consolida voci simili in una sola invece di accumulare (es. tre
-tensioni separate sullo stesso luogo possono diventare una voce piu' densa).
+## Vietato
 
-situations_remove — controlla sempre le situations gia' presenti nello state.
-- Rimuovi cio' che non e' piu' vero, e' stato risolto, o e' diventato rumore.
-- NON rimuovere stato di missioni/registri/iscrizioni solo perche' e' dettagliato:
-  il criterio e' il test di inclusione sopra, non la lunghezza della voce.
-- Usa stringhe ESATTE gia' presenti nello state quando rimuovi.
-  Esempio: rimuovi "in viaggio verso X" se il PG e' gia' arrivato a X;
-  rimuovi "in combattimento" se lo scontro si e' concluso.
-
----
-
-NPC_KNOWLEDGE_UPSERT — conoscenza per-NPC (upsert per id)
-
-Formato: { "npc_id": [{ "id": "slug", "summary": "..." }, ...] }
-
-- RIUSA id gia' presenti nel runtime / Sa (questa partita) per aggiornare summary.
-- Aggiungi id nuovi SOLO per fatti chiaramente detti/condivisi e ancora assenti.
-- NON inventare varianti di id (`reclamo_kael_v2`) se esiste gia' `reclamo_kael`.
-- NON copiare situations globali su tutti i presenti: solo chi era presente/coinvolto.
-- Se incerto, lascia {}.
-
-SITUATIONS — fili medi {id, summary}
-
-- situations_add: [{ "id": "...", "summary": "..." }]. Stesso id = aggiorna summary.
-- situations_remove: lista di **id** (non il testo summary) da chiudere.
-
----
-
-CHARACTER_UPDATES / LOCATION_UPDATES (solo quando servono)
-- character_updates: mood o relazione runtime per NPC gia' noti, se la chat lo mostra.
-- location_updates: mappa id_luogo → oggetto {atmosphere?, objects?, events?}.
-  objects ed events sono LISTE DI STRINGHE (es. ["bancone occupato", "bacheca"]),
-  mai un dict {nome: descrizione}.
-  Non mettere mai "atmosfera" come chiave di primo livello; non usare una stringa
-  al posto dell'oggetto intero.
-- Non inventare entita' o titoli nuovi.
-
-EXTRA_SET / EXTRA_REMOVE
-Solo per chiavi strutturate non previste altrove (es. wanted_level).
-Non sovrascrivere i campi fissi dello schema.
-
-FRONT_IMPACTS — solo strato 2 (interferenza locale su un intent gia' esistente):
-null | distort | block + intent_id.
-Esempio minimo: {"intent_id": "raid_locale", "effect": "distort",
-"evidence": "PG ha allertato i difensori prima dell'imboscata"}
-- Non usare per piani di arco globali (layer 3).
-- Non aggiornare mai day, minutes o time: l'orologio e' gestito solo dal codice.
-
----
-
-Restituisci SOLO JSON valido conforme a PresentReviewResult. Nessun testo fuori dal JSON.
+- Omettere `characters_active`.
+- Includere il PG in `characters_active`.
+- `situations_remove` come summary invece di id.
+- Inventare entita'/titoli non in chat.
+- Promuovere canone wiki (compito consolidamento).
+- Toccare l'orologio.

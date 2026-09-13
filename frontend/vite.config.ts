@@ -53,9 +53,9 @@ export default defineConfig({
           },
         ],
       },
+      // Keep the SW off in `vite dev`: it caches localhost and can blank the UI.
       devOptions: {
-        enabled: true,
-        type: "module",
+        enabled: false,
       },
     }),
   ],

@@ -1,156 +1,91 @@
-Analizza game state e conversazione recente.
+Analizza game state e conversazione recente. Promuovi in wiki solo cio' che conta nel lungo periodo (memoria permanente). NON scrivere nella chat.
 
-OBIETTIVO
-Promuovere in wiki solo cio' che conta nel lungo periodo. Questa e' memoria
-PERMANENTE: cio' che sopravvive anche quando la memoria a medio termine
-(situations) viene ripulita. La consolidazione NON deve scrivere nella chat.
+## Input
 
-REGOLE GENERALI
-- Non promuovere titoli o stati politici come fatti acquisiti se non sono
-  ancora pubblici in scena.
-- Non inventare magie, skill o poteri non emersi in chat o gia' in scheda.
-- Non creare canone di setting assente dalla chat.
+Nel messaggio user: PLAYER_ID, situations attuali (`id: summary`), NPC knowledge, OPEN THREADS ATTUALI, MEMORIE ATTUALI, GAME STATE, CONVERSAZIONE.
 
----
+## Output
 
-CHARACTER_UPDATES — scheda del giocatore
-
-OBBLIGATORIO: la chiave e' sempre il player_id (es. "prova"), mai i campi in
-piano. Formato:
-
+SOLO JSON valido `ConsolidationReviewResult` (niente testo fuori):
 ```json
-"character_updates": {
-  "<player_id>": {
-    "memories_add": ["..."],
-    "memories_remove": ["..."],
-    "spells_add": ["Nome — descrizione"],
-    "open_threads_add": ["..."],
-    "open_threads_remove": ["..."],
-    "location": "id-luogo-attuale"
+{
+  "create_entities": [],
+  "character_updates": {
+    "prova": {
+      "memories_add": ["Ha aiutato Kael nella missione lupi; incidente al ponte."],
+      "memories_remove": [],
+      "spells_add": [],
+      "open_threads_add": ["Completare rapporto missione lupi con la gilda"],
+      "open_threads_remove": [],
+      "location": "e-rantel"
+    },
+    "kael": {
+      "relationship_summary_add": ["Missione lupi col PG: accettata, incidente, conclusa."],
+      "relationship": 2
+    }
   },
-  "<npc_id>": {
-    "relationship_summary_add": ["Ha fatto col PG la missione lupi; incidente X lungo il tragitto."],
-    "relationship": 2
-  }
+  "location_updates": {},
+  "world_updates": {},
+  "state_cleanup": ["quest_wolves"],
+  "party_active": null
 }
 ```
 
-MEMORIES_ADD — alta densita', pochi fatti (0–3 voci per consolidamento)
+`character_updates` DEVE essere nidificato sotto id (`player_id` / `npc_id`), mai un oggetto piatto con `memories_add` in root.
 
-Test di promozione: questo fatto definira' ancora chi e' il personaggio o cosa
-gli e' successo tra 10+ scene? Se la risposta e' no, non e' una memoria, e' un
-log — resta fuori.
+## Procedure
 
-- Unifica eventi correlati in UNA sola voce densa, non micro-step separati.
-- SI: rapporti significativi con NPC, decisioni di viaggio importanti, scontri
-  con conseguenze durature, scoperte chiave.
-- NO:
-  - log di singoli cast (gli incantesimi vanno in spells_add, non qui)
-  - riflessioni interne, tono, umore, azioni banali
-  - duplicati o parafrasi di memorie gia' presenti
-  - dettagli gia' coperti da un fatto piu' ampio
-  - titoli politici non ancora validi in scena
+### Regole generali
+- Non promuovere titoli/stati politici non ancora pubblici in scena.
+- Non inventare magie/skill/poteri non emersi.
+- Non creare canone assente dalla chat.
 
-ESEMPIO BUONO (una voce densa):
-"Ha conosciuto [NPC]: lo ha aiutato a rifugiarsi; [dettaglio con conseguenza,
-es. familiare portato via da una fazione ostile]."
+### character_updates[player_id]
+Chiave = sempre `PLAYER_ID` dal user message.
 
-ESEMPIO CATTIVO (da evitare — tre voci separate per lo stesso evento):
-"Ha parlato con [NPC]." / "Ha lanciato [incantesimo]." / "Ha riflettuto sul potere."
+**memories_add** (0–3 voci dense):
+- Test: tra 10+ scene definira' ancora chi e' o cosa gli e' successo? Se no → non e' memoria.
+- Unifica eventi correlati in UNA voce. NO: log cast, tono, duplicati, titoli non assegnati.
 
-MEMORIES_REMOVE
-Togli memorie troppo granulari, duplicate o gia' assorbite in una voce piu'
-ampia. Usa stringhe ESATTE da MEMORIE ATTUALI.
+**memories_remove**: stringhe ESATTE da MEMORIE ATTUALI (granulari/duplicate).
 
----
+**spells_add**: `"Nome — descrizione"` nuovi → spellbook, non memorie.
 
-SPELLS_ADD / OPEN_THREADS / LOCATION
+**open_threads** (agenda permanente wiki):
+- Test: richiede azione/risposta futura del PG? Se solo stato di scena → resta in situations.
+- Formulazione: impegno concreto (chi/cosa/scadenza), non cronaca.
+- `open_threads_remove`: stringhe ESATTE da OPEN THREADS ATTUALI.
 
-- spells_add: solo incantesimi nuovi, formato "Nome — descrizione breve".
-  Finiscono nello spellbook del player, mai nelle memorie.
+**location**: solo se spostamento stabile.
 
-OPEN_THREADS — agenda del personaggio (wiki, persistente)
+### character_updates[npc_id]
+- `relationship_summary_add`: 1–2 voci dense ("cosa abbiamo vissuto insieme"); non log turno-per-turno; non duplicare Memorie del PG.
+- `relationship` (intero, opz.): solo se cambio chiaro in chat.
 
-Cosa sono: impegni, obiettivi o promesse del PG non ancora conclusi — missioni
-accettate, appuntamenti fissati, accordi stretti, compagni che aspettano una
-risposta, indagini attivamente in corso.
+### Situazioni con segno duraturo
+Se una situation chiusa ha lasciato segno su citta'/fazioni/luoghi → `location_updates` / `world_updates` (`events_add` / `tensions_add` / `sections_add`). Non mettere in memorie player cio' che deve restare situation aperta.
 
-Perche' possono comparire anche se gia' in situations: situations e' memoria
-di SCENA (ruota o viene ripulita quando il contesto cambia); open_threads e'
-l'agenda PERMANENTE del personaggio in wiki, visibile anche dopo che situations
-e' stata ripulita o ha superato il limite di voci attive. Le due liste possono
-contenere lo stesso filo in parallelo senza essere duplicati: sono due livelli
-di memoria con scopo diverso, non la stessa lista copiata due volte.
+### create_entities
+Solo id semantici; `type` in `character|party|location|faction`. Niente nomi inventati.
 
-Test di inclusione: questo filo richiede un'azione o una risposta futura del
-PG? Se si', e non e' gia' presente in OPEN THREADS ATTUALI, aggiungilo. Se e'
-solo uno stato di scena senza nulla da fare (es. un luogo "teso", una voce che
-circola), resta in situations e basta — non diventa un'agenda item.
+### state_cleanup
+Lista di **id** di situations da rimuovere dopo promozione (risolte, assorbite, rumore). Preferisci id da SITUATIONS ATTUALI (`id: summary`). Summary solo come fallback legacy. `[]` se nessuna.
+NON rimuovere fili ancora aperti e utili solo perche' vecchi.
+Non alterare altri campi game_state oltre `state_cleanup` e `party_active`.
 
-open_threads_add:
-- Controlla SEMPRE chat e situations per fili aperti riferiti al PG prima di
-  lasciare la lista invariata: non ometterli per pigrizia, ma non aggiungere
-  nulla che non superi il test sopra.
-- Una voce per filo, formulata come impegno concreto (chi / cosa / entro
-  quando, se noto), non come cronaca dell'evento che l'ha generato.
-  Esempio di formulazione: "[Azione da completare] con/per [NPC o gruppo],
-  entro/scadenza [se nota]" — non "Ha parlato di [argomento] con [NPC]".
+## Destini di una situation
 
-open_threads_remove: chiudi fili risolti, superati o duplicati. Usa stringhe
-ESATTE da OPEN THREADS ATTUALI.
+(a) promossa in wiki se valore permanente; (b) `state_cleanup` se risolta/assorbita; (c) lasciata in situations se ancora aperta.
 
-- location: aggiorna solo se il player si e' spostato stabilmente (id wiki o
-  slug gia' emerso in scena).
+## Priorita' in conflitto
 
-MEMORIES — attenzione:
-- NON inventare titoli, gradi o status ("cacciatore di lupi", ecc.) se non sono
-  stati assegnati esplicitamente in chat. Iscriversi a una missione != ottenere un titolo.
+1. Chat batte invenzione.
+2. Memorie = densita' alta, poche voci; open_threads = agenda, non log.
 
----
+## Vietato
 
-RELATIONSHIP_SUMMARY_ADD — Relazione col giocatore (schede NPC)
-
-Per ogni NPC con npc_knowledge runtime rilevante (NON il PG), in
-character_updates[<npc_id>]:
-- relationship_summary_add: 1-2 voci dense su "cosa abbiamo vissuto insieme"
-  (es. missione lupi: accettata, incidente X, conclusa → UNA voce).
-- Comprimi start/incidente/fine; vietato log turno-per-turno.
-- NON duplicare le Memorie del PG; e' la prospettiva dell'NPC sul rapporto.
-- relationship (intero, opzionale): solo se la chat mostra un cambio chiaro di legame.
-  Il codice scrive `Punteggio: N` + i bullet nella stessa sezione Relazione.
-
----
-
-SITUAZIONI RISOLTE CON SEGNO DURATURO
-
-Se una situation chiusa ha lasciato un segno stabile su citta'/fazioni/luoghi
-(non sul singolo player), promuovila in wiki tramite location_updates o
-world_updates (id wiki; usa events_add / tensions_add / sections_add).
-
-- Promuovi solo se il segno e' stabile, non rumore momentaneo.
-- Non promuovere in memorie cio' che deve restare una situation aperta —
-  quello e' compito della present review, non di questa.
-
----
-
-CREATE_ENTITIES — nuove entita' ricorrenti emerse in chat
-
-- Solo id semantici; type tra character|party|location|faction.
-- Niente nomi inventati; niente canone assente dalla chat.
-
----
-
-STATE_CLEANUP
-
-- Stringhe ESATTE da SITUATIONS ATTUALI da rimuovere dopo la promozione
-  (risolte, stale, o gia' assorbite in wiki).
-- NON rimuovere fili ancora aperti e utili alle scene successive — una
-  situation non promossa e non risolta resta in situations, non va qui solo
-  perche' e' vecchia.
-- [] se nessuna situation va rimossa.
-- Non alterare campi del game_state diversi da state_cleanup e party_active.
-
----
-
-Restituisci SOLO JSON valido conforme a ConsolidationReviewResult. Nessun
-testo fuori dal JSON.
+- `character_updates` piatto (`{"player_id": "...", "memories_add": [...]}` in root).
+- Scrivere nella chat.
+- Inventare titoli/status non assegnati (iscriversi a missione ≠ titolo).
+- Loggare micro-eventi come memorie.
+- `state_cleanup` di fili ancora aperti utili.

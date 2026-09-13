@@ -335,6 +335,17 @@ def test_resolution_to_delta_keeps_null_present_without_move() -> None:
     assert delta.characters_active is None
 
 
+def test_resolution_aliases_guild_faction_to_place() -> None:
+    res = TurnResolution(
+        time=NarrativeTime(bucket="breve", minutes=20),
+        location="adventurers-guild",
+        present=[],
+    )
+    delta = resolution_to_delta(res, previous_location="rovine-sud")
+    assert delta.player_location == "gilda-avventurieri"
+    assert delta.characters_active == []
+
+
 def test_resolve_presence_for_location_change_helpers() -> None:
     from app.services.state_reducer import resolve_presence_for_location_change
 

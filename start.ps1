@@ -38,7 +38,8 @@ if (-not (Test-Path (Join-Path $FrontendDir "node_modules"))) {
 Remove-Item Env:VITE_API_BASE -ErrorAction SilentlyContinue
 
 Write-Host "Backend  http://0.0.0.0:8000  (LAN: http://<IP-PC>:8000)" -ForegroundColor Cyan
-Write-Host "Frontend http://0.0.0.0:5173  (LAN: http://<IP-PC>:5173)" -ForegroundColor Cyan
+Write-Host "Frontend http://localhost:5173  (telefono: http://<IP-PC>:5173)" -ForegroundColor Cyan
+Write-Host "PWA sul telefono: in Chrome abilita unsafely-treat-insecure-origin-as-secure per quell'URL." -ForegroundColor DarkGray
 Write-Host "Ctrl+C per fermare entrambi.`n" -ForegroundColor DarkGray
 
 $backend = Start-Process -FilePath $Python -ArgumentList @(

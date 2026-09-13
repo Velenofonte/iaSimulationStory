@@ -1,17 +1,30 @@
 from __future__ import annotations
 
+from collections.abc import Callable
+
 from app.config import settings
 from app.models.narrative import NarrativeRequest, NarrativeTime
 from app.models.turn import TurnResolution
 from app.services.llm_client import LLMClient
+from app.services.places import is_travel_intent
 from app.services.token_estimate import estimate_tokens
 
 
 _PENDING_THREAD_HINT = (
     "La risoluzione precedente ha aperto un episodio senza popolare `situations_add`."
     " Rigenera lo stesso turno: ogni elemento introdotto dall'episodio e non risolto"
-    " in questo turno DEVE comparire in `situations_add` come stringa breve."
+    " in questo turno DEVE comparire in `situations_add` come oggetto"
+    " `{ \"id\": \"slug_stabile\", \"summary\": \"fatto breve\" }`."
     " Non cambiare il resto della risoluzione."
+)
+
+_MISSING_TRAVEL_LOCATION_HINT = (
+    "player_action e' uno spostamento fisico: `location` e' OBBLIGATORIO "
+    "(id wiki o slug stabile del luogo in cui il PG e' ORA a fine turno). "
+    "VIETATO lasciare location null. Non usare id di fazione o personaggio "
+    "(es. adventurers-guild): usa un id di luogo (es. gilda-avventurieri, rovine-sud). "
+    "Se il party del luogo lasciato non segue, `present` al nuovo posto "
+    "(spesso []) con present_leave per chi resta dietro."
 )
 
 
@@ -23,15 +36,36 @@ class TurnResolver:
     def resolve(self, request: NarrativeRequest) -> TurnResolution:
         result = self._complete(request)
         episode = request.episode
-        if episode is None or episode.tier < 2 or result.situations_add:
-            return result
-        # An opening that declares nothing pending is not a thread: ask again once.
+        if episode is not None and int(episode.tier) >= 2 and not result.situations_add:
+            result = self._retry_once(
+                request,
+                result,
+                _PENDING_THREAD_HINT,
+                keep=lambda r: bool(r.situations_add),
+            )
+        if is_travel_intent(request.player_action) and not (result.location or "").strip():
+            result = self._retry_once(
+                request,
+                result,
+                _MISSING_TRAVEL_LOCATION_HINT,
+                keep=lambda r: bool((r.location or "").strip()),
+            )
+        return result
+
+    def _retry_once(
+        self,
+        request: NarrativeRequest,
+        first: TurnResolution,
+        hint: str,
+        *,
+        keep: Callable[[TurnResolution], bool],
+    ) -> TurnResolution:
         first_tokens = self.last_tokens
-        retry = self._complete(request, retry_hint=_PENDING_THREAD_HINT)
+        retry = self._complete(request, retry_hint=hint)
         self.last_tokens = tuple(  # type: ignore[assignment]
             a + b for a, b in zip(first_tokens, self.last_tokens)
         )
-        return retry if retry.situations_add else result
+        return retry if keep(retry) else first
 
     def _complete(
         self,

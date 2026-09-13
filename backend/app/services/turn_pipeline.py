@@ -30,6 +30,7 @@ from app.services.narrative_stance import (
 )
 from app.services.notoriety import apply_deed, decay as decay_notoriety
 from app.services.presence import normalize_presence_list
+from app.services.places import infer_location_kind, normalize_place_id
 from app.services.save_manager import SaveManager
 from app.services.state_reducer import (
     apply_front_outcome,
@@ -146,6 +147,7 @@ class TurnPipeline:
             spells = collect_spells(message, shim, known)
 
             prev_location = state.player.location
+            prev_present = list(state.characters_active)
             resolution = ensure_pending_threads(resolution, episode, state)
             resolution = ensure_exit_threads(
                 resolution,
@@ -153,9 +155,21 @@ class TurnPipeline:
                 previous_location=prev_location,
                 state=state,
             )
+            loc = normalize_place_id(resolution.location) if resolution.location else ""
+            prev_norm = normalize_place_id(prev_location or "") or (prev_location or "")
+            if loc and loc != prev_norm:
+                kind, danger = infer_location_kind(loc)
+                try:
+                    self.wiki.ensure_location(loc, kind=kind, danger=danger)
+                except Exception as exc:
+                    print(f"[turn] ensure_location failed for {loc}: {exc}")
             apply_scene_delta(
                 state,
-                resolution_to_delta(resolution, previous_location=prev_location),
+                resolution_to_delta(
+                    resolution,
+                    previous_location=prev_location,
+                    previous_present=prev_present,
+                ),
             )
 
             if resolution.deed is not None:
@@ -224,6 +238,7 @@ class TurnPipeline:
                 world_pages=render_world,
                 episode=episode,
                 thread_active=bool(context.thread_hint),
+                acting_cast=list(state.characters_active),
             )
             reply = self.renderer.render(render_req)
             prior = last_assistant_message(list(context.chat_recent))

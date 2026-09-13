@@ -101,6 +101,8 @@ def test_clip_keeps_word_boundary() -> None:
 def test_exit_intent_detection() -> None:
     assert is_exit_intent("Bhe vado", location_changed=False)
     assert is_exit_intent("mi incammino verso E-Rantel", location_changed=False)
+    assert is_exit_intent("mi dirigo alla gilda", location_changed=False)
+    assert is_exit_intent("mi avvio", location_changed=False)
     assert is_exit_intent("guardo", location_changed=True)
     assert not is_exit_intent("guardo il medaglione", location_changed=False)
 

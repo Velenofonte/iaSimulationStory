@@ -311,6 +311,13 @@ class NarrativeRenderRequest(BaseModel):
         default=False,
         description="True se Pass 1 ha un filo in stallo: anti-eco nel brief/prosa",
     )
+    acting_cast: list[str] = Field(
+        default_factory=list,
+        description=(
+            "NPC che possono parlare/agire in questo beat "
+            "(canon_facts.present post-delta). Offscreen esclusi."
+        ),
+    )
 
 
 class NarrativeRenderResult(BaseModel):

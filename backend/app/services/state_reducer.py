@@ -297,10 +297,45 @@ def apply_front_outcome(state: GameState, outcome: FrontOutcome) -> SceneStateDe
     return delta
 
 
+def projected_acting_cast(
+    *,
+    previous_present: list[str],
+    present: list[str] | None,
+    present_join: list[str],
+    present_leave: dict[str, OffscreenCharacter] | None,
+) -> set[str]:
+    """NPC ids allowed to act / receive knowledge after this resolution."""
+    if present is not None:
+        cast = [str(x).strip() for x in present if str(x or "").strip()]
+    else:
+        cast = [str(x).strip() for x in previous_present if str(x or "").strip()]
+    seen = {c.casefold() for c in cast}
+    for raw in present_join:
+        token = str(raw or "").strip()
+        if token and token.casefold() not in seen:
+            cast.append(token)
+            seen.add(token.casefold())
+    leave = {str(k).strip().casefold() for k in (present_leave or {})}
+    return {c for c in cast if c.casefold() not in leave}
+
+
+def _filter_knowledge_to_cast(
+    upsert: dict[str, list[NpcKnowledgeFact]],
+    allowed: set[str],
+) -> dict[str, list[NpcKnowledgeFact]]:
+    allowed_cf = {a.casefold() for a in allowed}
+    return {
+        cid: facts
+        for cid, facts in (upsert or {}).items()
+        if str(cid).strip().casefold() in allowed_cf
+    }
+
+
 def resolution_to_delta(
     resolution: TurnResolution,
     *,
     previous_location: str | None = None,
+    previous_present: list[str] | None = None,
 ) -> SceneStateDelta:
     """Map resolver output to a scene delta (location normalized)."""
     location = None
@@ -311,6 +346,15 @@ def resolution_to_delta(
         new_location=location,
         present=resolution.present,
     )
+    knowledge = dict(resolution.npc_knowledge_upsert)
+    if previous_present is not None:
+        allowed = projected_acting_cast(
+            previous_present=previous_present,
+            present=present,
+            present_join=list(resolution.present_join),
+            present_leave=dict(resolution.present_leave),
+        )
+        knowledge = _filter_knowledge_to_cast(knowledge, allowed)
     return SceneStateDelta(
         player_location=location,
         characters_active=present,
@@ -318,7 +362,7 @@ def resolution_to_delta(
         present_leave=dict(resolution.present_leave),
         situations_add=list(resolution.situations_add),
         situations_remove=list(resolution.situations_remove),
-        npc_knowledge_upsert=dict(resolution.npc_knowledge_upsert),
+        npc_knowledge_upsert=knowledge,
     )
 
 
@@ -390,7 +434,7 @@ def present_review_to_delta(
     preserve = not apply_presence
     if apply_presence:
         if result.player_location:
-            player_location = result.player_location
+            player_location = normalize_place_id(result.player_location) or result.player_location
         characters_active = list(result.characters_active)
         # Explicit leave from review, if any.
         explicit = getattr(result, "present_leave", None) or {}

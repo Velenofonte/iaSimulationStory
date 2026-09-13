@@ -12,6 +12,12 @@
     <meta name="apple-mobile-web-app-title" content="Overlord" />
     <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent" />
     <title>Overlord — Simulatore Narrativo</title>
+    <script>
+      window.addEventListener("beforeinstallprompt", function (event) {
+        event.preventDefault();
+        window.__OVERLORD_PWA_PROMPT = event;
+      });
+    </script>
     <link rel="preconnect" href="https://fonts.googleapis.com" />
     <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
     <link
