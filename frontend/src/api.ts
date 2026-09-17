@@ -209,9 +209,14 @@ export async function getChat(sessionId: string): Promise<{ role: "user" | "assi
   return res.json();
 }
 
+export type SpellOutput = "info" | "effect";
+export type SpellManifest = "visible" | "subtle";
+
 export type SpellEntry = {
   name: string;
   description: string;
+  output?: SpellOutput;
+  manifest?: SpellManifest;
 };
 
 export type CharacterSheet = {
@@ -241,6 +246,19 @@ export async function getPlayerSheet(sessionId: string): Promise<CharacterSheet>
 
 export async function getSpellbook(sessionId: string): Promise<Spellbook> {
   const res = await fetch(`${API_BASE}/api/session/${sessionId}/spellbook?t=${Date.now()}`);
+  if (!res.ok) throw new Error(await res.text());
+  return res.json();
+}
+
+export async function updateSpellTags(
+  sessionId: string,
+  updates: { name: string; output: SpellOutput; manifest: SpellManifest }[],
+): Promise<Spellbook> {
+  const res = await fetch(`${API_BASE}/api/session/${sessionId}/spellbook/tags`, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ updates }),
+  });
   if (!res.ok) throw new Error(await res.text());
   return res.json();
 }

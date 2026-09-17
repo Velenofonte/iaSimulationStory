@@ -106,7 +106,7 @@ def fake_llm(monkeypatch: pytest.MonkeyPatch):
 
     Tests can set `fake_llm.responses` to a list of JSON strings consumed FIFO.
     """
-    from app.services import llm_client as llm_mod
+    from app.llm import llm_client as llm_mod
 
     state: dict[str, Any] = {"responses": [], "calls": []}
 
@@ -126,4 +126,8 @@ def fake_llm(monkeypatch: pytest.MonkeyPatch):
         return llm_mod.LLMClient._mock_response(self, user)
 
     monkeypatch.setattr(llm_mod.LLMClient, "complete", _complete)
+    # Keep shim path patched too (legacy imports).
+    from app.services import llm_client as llm_shim
+
+    monkeypatch.setattr(llm_shim.LLMClient, "complete", _complete)
     return state

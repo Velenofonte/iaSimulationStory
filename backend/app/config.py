@@ -26,7 +26,7 @@ class Settings(BaseSettings):
     llm_model_ingest: str = "gpt-4o-mini"
     present_review_every_n: int = 5
     consolidate_every_n: int = 12
-    undo_checkpoint_depth: int = 3
+    undo_checkpoint_depth: int = 10
     recent_chat_messages: int = 20
     wiki_page_cap: int = 6
     default_story_id: str = "overlord"
@@ -57,6 +57,13 @@ class Settings(BaseSettings):
     episode_quiet_ramp: float = 1.0
     episode_seed_salt: str = ""
     thread_stall_turns: int = 3
+    # Arc stall: days of clock inactivity before auto-close (lapsed/broken).
+    stall_after_days: int = 14
+    # One-shot LLM prose for chronicle at arc close (disabled in tests).
+    arc_close_review: bool = False
+
+    def story_eras_dir(self, story_id: str) -> Path:
+        return self.story_dir(story_id) / "eras"
 
     @property
     def stories_dir(self) -> Path:

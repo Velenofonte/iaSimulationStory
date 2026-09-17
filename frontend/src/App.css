@@ -1275,6 +1275,43 @@ textarea {
   line-height: 1.4;
 }
 
+.spell-head {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: space-between;
+  gap: 0.35rem 0.6rem;
+}
+
+.spell-tag-row {
+  display: inline-flex;
+  gap: 0.3rem;
+}
+
+button.spell-tag {
+  cursor: pointer;
+  background: transparent;
+  font: inherit;
+}
+
+.spell-tag-info {
+  color: color-mix(in srgb, var(--accent) 90%, var(--text));
+  border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
+}
+
+.spell-tag-effect {
+  color: var(--muted);
+}
+
+.spell-tag-subtle {
+  color: color-mix(in srgb, #7a6a9a 85%, var(--muted));
+  border-color: color-mix(in srgb, #7a6a9a 40%, var(--line));
+}
+
+.spell-tag-visible {
+  color: var(--muted);
+}
+
 .chat {
   display: flex;
   flex-direction: column;

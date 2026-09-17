@@ -1,0 +1,98 @@
+# Era — Santo Regno di Roble (Vol.12-13)
+# Fotografia del mondo all'inizio dell'invasione demi-umana.
+# I volumi 1-11 vivono solo come chronicle (dati), non come archi giocati.
+
+id: holy_kingdom
+name: Santo Regno di Roble — invasione
+canon_source: "Overlord Vol.12-13 — The Paladin of the Holy Kingdom"
+covers_backstory: "Vol.1-11"
+start:
+  day: 1
+  minutes: 480
+  location: hoburns
+player_role: external
+overlays_dir: overlays/holy_kingdom
+insiders: [ainz, albedo, demiurge]
+
+entry_arc: hk_invasion
+arc_sequence:
+  - id: hk_invasion
+    next:
+      - arc: hk_embassy
+        when_outcome: [canon, weak, diverted]
+  - id: hk_embassy
+    next:
+      - arc: hk_liberation
+        when_outcome: [canon, weak, diverted]
+        requires_flags: { sorcerer_king_allied: true }
+  - id: hk_liberation
+    next:
+      - arc: hk_hoburns_siege
+        when_outcome: [canon, weak, diverted]
+  - id: hk_hoburns_siege
+    next:
+      - arc: hk_aftermath
+        when_outcome: [canon, weak, diverted]
+  - id: hk_aftermath
+    next: []
+
+world_flags:
+  sorcerer_kingdom_founded: true
+  e_rantel_annexed: true
+  empire_is_vassal: true
+  ainz_publicly_sorcerer_king: true
+  gazef_dead: true
+  re_estize_fallen: true
+  shalltear_control_incident_resolved: true
+  dwarven_alliance: true
+  demiurge_as_jaldabaoth_active: true
+
+chronicle:
+  - id: nazarick_appears
+    reach: local
+    day_offset: -900
+    summary: "Una tomba imponente e' apparsa nel Grande Bosco di Tob; pochi ne conoscono la vera natura."
+  - id: carne_saved
+    reach: regional
+    day_offset: -880
+    summary: "Il villaggio di Carne e' stato salvato da un mago oscuro di potere sproporzionato."
+  - id: momon_adamantite
+    reach: regional
+    day_offset: -850
+    summary: "L'avventuriero corazzato nero Momon ha raggiunto il rango Adamantite a E-Rantel."
+  - id: jaldabaoth_reestize_raid
+    reach: national
+    day_offset: -700
+    summary: "Un demone chiamato Jaldabaoth ha attaccato la capitale di Re-Estize con un esercito demoniaco."
+  - id: katze_massacre
+    reach: world
+    day_offset: -540
+    summary: "Un esercito di Re-Estize e' stato annientato nella piana di Katze da un mago non-morto."
+  - id: sorcerer_kingdom_founded
+    reach: world
+    day_offset: -520
+    summary: "E-Rantel e le sue terre sono il Regno Stregone, governato dal Re Stregone Ainz Ooal Gown."
+  - id: gazef_death
+    reach: national
+    day_offset: -540
+    summary: "Gazef Stronoff, Warrior Captain di Re-Estize, e' morto in duello contro il Re Stregone."
+  - id: empire_vassal
+    reach: world
+    day_offset: -400
+    summary: "L'Impero Baharuth si e' fatto vassallo del Regno Stregone."
+  - id: re_estize_destroyed
+    reach: world
+    day_offset: -200
+    summary: "Il Regno di Re-Estize e' crollato; i suoi territori sono stati annessi o devastati."
+  - id: dwarven_kingdom_contact
+    reach: regional
+    day_offset: -300
+    summary: "Il Regno Stregone ha stabilito rapporti con il Regno dei Nani nelle montagne Azerlisia."
+  - id: jaldabaoth_true_identity
+    reach: none
+    secret: true
+    summary: "Jaldabaoth e' in realta' Demiurge, e l'invasione del Santo Regno e' un progetto di Nazarick."
+  - id: invasion_plan_secret
+    reach: none
+    secret: true
+    summary: "L'armata demi-umana e' stata organizzata da Nazarick per costruire credito diplomatico del Re Stregone."

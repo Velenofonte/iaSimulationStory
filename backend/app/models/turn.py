@@ -42,6 +42,14 @@ class TurnResolution(BaseModel):
         default_factory=list,
         description="Ids of situations to close (from known_ids.situations)",
     )
+    player_findings_add: list[NpcKnowledgeFact] = Field(
+        default_factory=list,
+        description="Contenuto privato di magie informative di questo turno",
+    )
+    player_findings_reveal: list[str] = Field(
+        default_factory=list,
+        description="Ids di player_findings che il PG ha dichiarato ad alta voce",
+    )
     npc_knowledge_upsert: dict[str, list[NpcKnowledgeFact]] = Field(default_factory=dict)
     deed: DeedRecord | None = Field(
         default=None,
@@ -120,12 +128,12 @@ class TurnResolution(BaseModel):
             return []
         return [str(x).strip() for x in v if str(x or "").strip()]
 
-    @field_validator("situations_add", mode="before")
+    @field_validator("situations_add", "player_findings_add", mode="before")
     @classmethod
     def _coerce_situations_add(cls, v: object) -> list[NpcKnowledgeFact]:
         return coerce_fact_list(v)
 
-    @field_validator("situations_remove", mode="before")
+    @field_validator("situations_remove", "player_findings_reveal", mode="before")
     @classmethod
     def _coerce_situations_remove(cls, v: object) -> list[str]:
         return coerce_id_list(v)
@@ -160,6 +168,8 @@ class SceneStateDelta(BaseModel):
     present_leave: dict[str, OffscreenCharacter] = Field(default_factory=dict)
     situations_add: list[NpcKnowledgeFact] = Field(default_factory=list)
     situations_remove: list[str] = Field(default_factory=list)
+    player_findings_add: list[NpcKnowledgeFact] = Field(default_factory=list)
+    player_findings_remove: list[str] = Field(default_factory=list)
     character_runtime: dict[str, CharacterPresentUpdate] = Field(default_factory=dict)
     location_runtime: dict[str, LocationPresentUpdate] = Field(default_factory=dict)
     front_impacts: list[FrontImpact] = Field(default_factory=list)
@@ -182,14 +192,14 @@ class SceneStateDelta(BaseModel):
     def _coerce_none_lists(cls, v: Any) -> Any:
         return [] if v is None else v
 
-    @field_validator("situations_add", mode="before")
+    @field_validator("situations_add", "player_findings_add", mode="before")
     @classmethod
     def _coerce_situations_add(cls, v: Any) -> list[NpcKnowledgeFact]:
         if v is None:
             return []
         return coerce_fact_list(v)
 
-    @field_validator("situations_remove", mode="before")
+    @field_validator("situations_remove", "player_findings_remove", mode="before")
     @classmethod
     def _coerce_situations_remove(cls, v: Any) -> list[str]:
         if v is None:
@@ -244,6 +254,14 @@ class FrontOutcome(BaseModel):
     fired_beats: list[str] = Field(default_factory=list)
     situations_add: list[NpcKnowledgeFact] = Field(default_factory=list)
     characters_add: list[str] = Field(default_factory=list)
+    characters_nearby: dict[str, str] = Field(
+        default_factory=dict,
+        description="wiki_id -> place: sul luogo ma non in present (nearby)",
+    )
+    location_ambient: dict[str, list[str]] = Field(
+        default_factory=dict,
+        description="place -> ruoli ambient (guardia, …)",
+    )
     location_events: dict[str, list[str]] = Field(default_factory=dict)
     location_atmosphere: dict[str, str] = Field(default_factory=dict)
     character_locations: dict[str, str] = Field(default_factory=dict)
@@ -270,7 +288,7 @@ class FrontOutcome(BaseModel):
             return []
         return coerce_fact_list(v)
 
-    @field_validator("location_events", "location_atmosphere", "character_locations", mode="before")
+    @field_validator("location_events", "location_atmosphere", "character_locations", "characters_nearby", "location_ambient", mode="before")
     @classmethod
     def _coerce_none_dicts(cls, v: Any) -> Any:
         return {} if v is None else v
@@ -289,11 +307,19 @@ class NarrativeRenderRequest(BaseModel):
         default="",
         description="Genere/tono dalla meta della storia; vuoto se assente",
     )
+    story_so_far: str = Field(
+        default="",
+        description="Cronaca nota al PG; vuoto se assente",
+    )
     stance: str = Field(
         default="action",
         description="action|passive|wait — wait = avanza fino alla prima svolta",
     )
     scene_brief: list[str] = Field(default_factory=list)
+    player_findings_new: list[NpcKnowledgeFact] = Field(
+        default_factory=list,
+        description="Findings privati di questo turno da narrare come percezione del PG",
+    )
     interrupt_hint: str | None = None
     fired_beat_summaries: list[str] = Field(default_factory=list)
     character_cards: list[str] = Field(default_factory=list)
@@ -319,6 +345,13 @@ class NarrativeRenderRequest(BaseModel):
         ),
     )
 
+    @field_validator("player_findings_new", mode="before")
+    @classmethod
+    def _coerce_findings_new(cls, v: Any) -> list[NpcKnowledgeFact]:
+        if v is None:
+            return []
+        return coerce_fact_list(v)
+
 
 class NarrativeRenderResult(BaseModel):
     text: str
@@ -336,6 +369,9 @@ class CompletedTurn(BaseModel):
     reply: str
     scene_delta: SceneStateDelta | None = None
     front_outcome: FrontOutcome | None = None
-    spells: dict[str, str] = Field(default_factory=dict)
+    spells: dict[str, Any] = Field(
+        default_factory=dict,
+        description="name -> description or SpellRecord",
+    )
     wiki_patches: list[dict[str, Any]] = Field(default_factory=list)
     chat_messages: list[ChatMessage] = Field(default_factory=list)

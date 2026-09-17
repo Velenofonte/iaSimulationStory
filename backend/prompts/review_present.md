@@ -48,6 +48,7 @@ OBBLIGATORIO ogni review (mai omesso, mai null): lista COMPLETA sostitutiva di c
 - Solo NPC/ruoli terzi; VIETATO il PG.
 - Se location cambiata: rivaluta da zero (togli NPC del luogo lasciato).
 - Anche senza cambio luogo: togli chi e' andato altrove.
+- Fonte primaria = ultimo `present` in chat (anche `[]`). `character.location == player.location` **non** implica presenza: non riammettere NPC che la chat ha gia' tolto dal cast.
 
 ### present_leave
 Per ogni NPC tolto da `characters_active` ma ancora richiamabile: `{ "npc_id": { "where": "...", "reason": "..." } }`.

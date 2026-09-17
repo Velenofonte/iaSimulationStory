@@ -16,9 +16,12 @@ sys.path.insert(0, str(ROOT / "backend"))
 from app.config import settings  # noqa: E402
 from app.services.character_sheet_normalize import normalize_character_body  # noqa: E402
 from app.services.llm_client import LLMClient  # noqa: E402
+from app.services.page_normalize import normalize_page_body  # noqa: E402
 from app.services.story_catalog import load_story_ingest_prompt  # noqa: E402
 from app.services.wiki_overlay import validate_overlay_body  # noqa: E402
 from app.services.wiki_writer import WikiWriter  # noqa: E402
+from app.services.era_loader import parse_era_dict  # noqa: E402
+from app.services.era_ingest_validate import validate_era_yaml  # noqa: E402
 
 CHARACTER_META: dict[str, dict[str, str]] = {
     "ainz": {"id": "ainz_ooal_gown", "name": "Ainz Ooal Gown"},
@@ -119,6 +122,20 @@ def normalize_ingest_output(content: str, wiki_path: Path) -> str:
         body = normalize_character_body(body, seed=True)
         if not body.strip():
             raise ValueError(f"empty character body after normalize for {wiki_path.name}")
+    else:
+        page_type = "world"
+        if "locations" in wiki_path.parts:
+            page_type = "location"
+        elif "nations" in wiki_path.parts:
+            page_type = "nation"
+        elif "factions" in wiki_path.parts:
+            page_type = "faction"
+        return normalize_page_body(
+            f"---\n{yaml.safe_dump(meta, allow_unicode=True, sort_keys=False)}---\n\n{body}\n",
+            page_type=page_type,
+            stem=stem,
+            defaults=meta,
+        )
 
     yaml_block = yaml.safe_dump(meta, allow_unicode=True, sort_keys=False).strip()
     return f"---\n{yaml_block}\n---\n\n{body}\n"
@@ -139,6 +156,48 @@ def main(limit: int | None = None, force: bool = False, only: str | None = None)
         system = f"{system.rstrip()}\n\n## Regole aggiuntive della storia\n{story_rules}\n"
     for raw_path in raw_files:
         rel = raw_path.relative_to(settings.raw_dir)
+        rel_str = str(rel).replace("\\", "/")
+
+        # Era digest → stories/<id>/eras/<id>.yaml
+        if rel_str.startswith("eras/") or "eras" in raw_path.parts:
+            era_id = raw_path.stem.replace("-", "_")
+            out_path = settings.story_dir(settings.default_story_id) / "eras" / f"{era_id}.yaml"
+            if out_path.exists() and not force:
+                print(f"skip {out_path}")
+                continue
+            era_system = llm.load_prompt("era_digest")
+            source = raw_path.read_text(encoding="utf-8")
+            user = (
+                f"SOURCE ({raw_path.name}):\n{source[:20000]}\n\n"
+                "Genera il YAML d'era completo secondo lo schema."
+            )
+            content = llm.complete(
+                system=era_system,
+                user=user,
+                model=settings.llm_model_ingest,
+                temperature=0.2,
+            )
+            content = content.strip()
+            if content.startswith("```"):
+                content = re.sub(r"^```(?:yaml)?\s*", "", content)
+                content = re.sub(r"\s*```$", "", content)
+            data = yaml.safe_load(content) or {}
+            if not isinstance(data, dict):
+                raise ValueError(f"era ingest did not return a mapping: {raw_path}")
+            data.setdefault("id", era_id)
+            errs = validate_era_yaml(data)
+            if errs:
+                raise ValueError("; ".join(errs))
+            # Round-trip through parser for normalization
+            parse_era_dict(data)
+            out_path.parent.mkdir(parents=True, exist_ok=True)
+            out_path.write_text(
+                yaml.safe_dump(data, allow_unicode=True, sort_keys=False),
+                encoding="utf-8",
+            )
+            print(f"ingest era {raw_path} -> {out_path}")
+            continue
+
         wiki_path = settings.wiki_dir / rel
         if wiki_path.exists() and not force:
             print(f"skip {wiki_path}")
@@ -155,7 +214,6 @@ def main(limit: int | None = None, force: bool = False, only: str | None = None)
         content = normalize_ingest_output(content, wiki_path)
         wiki_path.parent.mkdir(parents=True, exist_ok=True)
         wiki_path.write_text(content.strip() + "\n", encoding="utf-8")
-        rel_str = str(rel).replace("\\", "/")
         if not rel_str.startswith("overlays/"):
             writer._add_index(wiki_path.stem, rel_str)
         print(f"ingest {raw_path} -> {wiki_path}")

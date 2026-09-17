@@ -22,6 +22,7 @@ class LocationPresentUpdate(BaseModel):
     objects: list[str] = Field(default_factory=list)
     atmosphere: str | None = None
     events: list[str] = Field(default_factory=list)
+    ambient: list[str] = Field(default_factory=list)
 
     @staticmethod
     def _coerce_str_list(v: Any) -> list[str]:
@@ -339,3 +340,16 @@ class ConsolidationReviewResult(BaseModel):
             player_key = player_key.strip()
         update = {k: v[k] for k in flat_keys}
         return {player_key: update}
+
+
+class ArcCloseChronicleLine(BaseModel):
+    id: str = ""
+    summary: str
+    reach: Literal["none", "local", "regional", "national", "world"] = "local"
+    secret: bool = False
+
+
+class ArcCloseReviewResult(BaseModel):
+    """LLM prose-only chronicle lines after an arc closes (no mechanical decisions)."""
+
+    chronicle: list[ArcCloseChronicleLine] = Field(default_factory=list)

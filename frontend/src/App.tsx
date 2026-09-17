@@ -8,6 +8,7 @@ import {
   getCanUndo,
   getPlayerSheet,
   getSpellbook,
+  updateSpellTags,
   getState,
   listFronts,
   listPlayable,
@@ -26,6 +27,9 @@ import {
   type RaceOption,
   type SessionSummary,
   type Spellbook,
+  type SpellEntry,
+  type SpellManifest,
+  type SpellOutput,
   type StorySummary,
 } from "./api";
 import { OfflineBanner, PwaInstall } from "./pwa";
@@ -264,6 +268,40 @@ function App() {
 
   function toggleSection(key: PanelSection) {
     setOpenSections((prev) => ({ ...prev, [key]: !prev[key] }));
+  }
+
+  async function cycleSpellTag(
+    spell: SpellEntry,
+    axis: "output" | "manifest",
+  ) {
+    if (!sessionId) return;
+    const currentOutput: SpellOutput = spell.output === "info" ? "info" : "effect";
+    const currentManifest: SpellManifest =
+      spell.manifest === "subtle" ? "subtle" : "visible";
+    const output: SpellOutput =
+      axis === "output"
+        ? currentOutput === "info"
+          ? "effect"
+          : "info"
+        : currentOutput;
+    const manifest: SpellManifest =
+      axis === "manifest"
+        ? currentManifest === "subtle"
+          ? "visible"
+          : "subtle"
+        : currentManifest;
+    try {
+      const next = await updateSpellTags(sessionId, [
+        {
+          name: spell.name,
+          output,
+          manifest,
+        },
+      ]);
+      setSpellbook(next);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
   }
 
   useEffect(() => {
@@ -1029,12 +1067,36 @@ function App() {
           >
             {spellbook?.spells?.length ? (
               <ul className="spell-list">
-                {spellbook.spells.map((sp) => (
-                  <li key={sp.name}>
-                    <strong>{sp.name}</strong>
-                    {sp.description ? <span className="muted"> — {sp.description}</span> : null}
-                  </li>
-                ))}
+                {spellbook.spells.map((sp) => {
+                  const output = sp.output === "info" ? "info" : "effect";
+                  const manifest = sp.manifest === "subtle" ? "subtle" : "visible";
+                  return (
+                    <li key={sp.name}>
+                      <div className="spell-head">
+                        <strong>{sp.name}</strong>
+                        <span className="spell-tag-row">
+                          <button
+                            type="button"
+                            className={`arc-badge spell-tag spell-tag-${output}`}
+                            title="Clicca per alternare info/effect"
+                            onClick={() => void cycleSpellTag(sp, "output")}
+                          >
+                            {output}
+                          </button>
+                          <button
+                            type="button"
+                            className={`arc-badge spell-tag spell-tag-${manifest}`}
+                            title="Clicca per alternare visible/subtle"
+                            onClick={() => void cycleSpellTag(sp, "manifest")}
+                          >
+                            {manifest}
+                          </button>
+                        </span>
+                      </div>
+                      {sp.description ? <span className="muted"> — {sp.description}</span> : null}
+                    </li>
+                  );
+                })}
               </ul>
             ) : (
               <p className="muted">Nessun incantesimo. Definisci il primo con [Nome — descrizione].</p>

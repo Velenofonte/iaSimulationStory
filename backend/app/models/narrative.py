@@ -26,6 +26,12 @@ SITUATIONS_EPISTEMIC_NOTE = (
     "(Sa / Relazione / knowledge) o detto in presenza / su documento"
 )
 
+PLAYER_FINDINGS_EPISTEMIC_NOTE = (
+    "Conoscenza privata del PG da magie informative (output=info). "
+    "NARRATOR_ONLY per gli NPC: il PG puo' tacerla, riferirla o distorcerla. "
+    "In prosa al PG: i findings SONO noti (percezione del PG)."
+)
+
 class NarrativeTime(BaseModel):
     bucket: str = Field(
         description="istantanea|breve|media|lunga|riposo (alias en: short/instant/…); range allargati per far avanzare l'arco",
@@ -44,15 +50,44 @@ class NarrativeTime(BaseModel):
 class NarrativeSpell(BaseModel):
     name: str
     description: str = ""
+    output: str = Field(
+        default="effect",
+        description="info|effect — knowledge for the PC vs reality change",
+    )
+    manifest: str = Field(
+        default="visible",
+        description="visible|subtle — whether present witnesses perceive the cast",
+    )
 
     @classmethod
     def from_loose(cls, value: object) -> "NarrativeSpell":
         if isinstance(value, NarrativeSpell):
             return value
+        from app.wiki.spell_tags import ensure_spell_tags, parse_spell_entry_line, strip_tag_suffix
+
         if isinstance(value, dict):
-            return cls.model_validate(value)
-        name, desc = split_spell_line(str(value or ""))
-        return cls(name=name, description=desc)
+            name = str(value.get("name") or "").strip()
+            desc = str(value.get("description") or "").strip()
+            clean_desc, p_out, p_man = strip_tag_suffix(desc)
+            out, man = ensure_spell_tags(
+                name,
+                clean_desc,
+                output=value.get("output") or p_out,
+                manifest=value.get("manifest") or p_man,
+            )
+            return cls(
+                name=name,
+                description=clean_desc,
+                output=out,
+                manifest=man,
+            )
+        parsed = parse_spell_entry_line(str(value or ""))
+        return cls(
+            name=parsed["name"],
+            description=parsed["description"],
+            output=parsed["output"],
+            manifest=parsed["manifest"],
+        )
 
 
 class NarrativeReply(BaseModel):
@@ -122,6 +157,12 @@ class NarrativeReply(BaseModel):
 class NarrativeChatTurn(BaseModel):
     role: str
     content: str
+    location: str | None = None
+    present: list[str] = Field(default_factory=list)
+    tags: list[str] = Field(
+        default_factory=list,
+        description="Action tags: dialogue|overt|stealth|hide|private|wait",
+    )
 
 
 class NarrativeWorldPage(BaseModel):
@@ -139,6 +180,10 @@ class NarrativeCanonFacts(BaseModel):
         description="NPC fuori scena ma richiamabili: 'id — where: reason'",
     )
     situations: list[NpcKnowledgeFact] = Field(default_factory=list)
+    player_findings: list[NpcKnowledgeFact] = Field(
+        default_factory=list,
+        description="Fatti privati del PG da magie informative",
+    )
     known_ids: dict[str, Any] = Field(
         default_factory=dict,
         description=(
@@ -148,19 +193,24 @@ class NarrativeCanonFacts(BaseModel):
     )
     extra: dict[str, Any] = Field(default_factory=dict)
 
-    @field_validator("situations", mode="before")
+    @field_validator("situations", "player_findings", mode="before")
     @classmethod
-    def _coerce_situations(cls, v: Any) -> list[NpcKnowledgeFact]:
+    def _coerce_fact_lists(cls, v: Any) -> list[NpcKnowledgeFact]:
         return coerce_fact_list(v)
 
     @model_serializer(mode="wrap")
-    def _serialize_with_situations_note(self, serializer):
-        """Wrap situations for LLM dumps: note + {id, summary} items."""
+    def _serialize_with_epistemic_notes(self, serializer):
+        """Wrap situations / player_findings for LLM dumps with epistemic notes."""
         data = serializer(self)
         items = list(data.get("situations") or [])
         data["situations"] = {
             "note": SITUATIONS_EPISTEMIC_NOTE,
             "items": items,
+        }
+        findings = list(data.get("player_findings") or [])
+        data["player_findings"] = {
+            "note": PLAYER_FINDINGS_EPISTEMIC_NOTE,
+            "items": findings,
         }
         return data
 
@@ -168,6 +218,8 @@ class NarrativeCanonFacts(BaseModel):
 class NarrativeSpellEntry(BaseModel):
     name: str
     description: str = ""
+    output: str = Field(default="effect", description="info|effect")
+    manifest: str = Field(default="visible", description="visible|subtle")
 
 
 class Episode(BaseModel):
@@ -193,6 +245,10 @@ class NarrativeRequest(BaseModel):
     active_arc: str = Field(
         default="",
         description="Slice dell'arco/front attivo (beat correnti); vuoto se nessuno",
+    )
+    story_so_far: str = Field(
+        default="",
+        description="Cronaca filtrata per reach + pressioni del mondo; vuoto se assente",
     )
     world_pages: list[NarrativeWorldPage] = Field(default_factory=list)
     character_cards: list[str] = Field(default_factory=list)

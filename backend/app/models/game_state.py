@@ -4,6 +4,19 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, field_validator
 
 
+LensLevel = Literal["seen", "named"]
+
+
+class PlayerLens(BaseModel):
+    """What the PC has encountered in play (wiki ids → depth).
+
+    - seen: present / visited; describe by role/aspect, no proper name in prose
+    - named: name is in play; narrator may use it freely
+    """
+
+    entities: dict[str, LensLevel] = Field(default_factory=dict)
+
+
 class PlayerState(BaseModel):
     id: str = "player"
     name: str = "Avventuriero"
@@ -12,6 +25,7 @@ class PlayerState(BaseModel):
     character_id: str = ""
     origin: Literal["lore", "custom"] = "custom"
     race: str | None = None
+    lens: PlayerLens = Field(default_factory=PlayerLens)
 
     def resolved_character_id(self) -> str:
         if self.character_id.strip():
@@ -198,6 +212,10 @@ class LocationRuntime(BaseModel):
     objects: list[str] = Field(default_factory=list)
     atmosphere: str | None = None
     events: list[str] = Field(default_factory=list)
+    ambient: list[str] = Field(
+        default_factory=list,
+        description="Ruoli anonimi sul luogo (guardia, mercante, …)",
+    )
 
 
 class FrontRuntime(BaseModel):
@@ -210,6 +228,55 @@ class FrontRuntime(BaseModel):
     last_fired_at_day: int | None = None
     last_fired_at_minutes: int | None = None
     distortion_notes: list[str] = Field(default_factory=list)
+    interrupted_at_day: int | None = None
+    started_day: int | None = None
+    # Added to beat.due_abs_minutes when start.relative_to = previous_arc_close
+    due_offset_minutes: int = 0
+
+
+class ChronicleEntry(BaseModel):
+    """A world-memory fact with who may know it (reach) and secrecy."""
+
+    id: str
+    summary: str
+    reach: Literal["none", "local", "regional", "national", "world"] = "local"
+    secret: bool = False
+    source: Literal["canon_digest", "played_arc", "runtime"] = "runtime"
+    arc_id: str | None = None
+    day: int | None = None
+
+
+class ArcRecord(BaseModel):
+    """Closed-arc ledger entry (how an arc ended)."""
+
+    arc_id: str
+    outcome: Literal["canon", "weak", "diverted", "broken", "lapsed"]
+    started_day: int
+    closed_day: int
+    last_beat: str | None = None
+    skipped_beats: list[str] = Field(default_factory=list)
+    unresolved_intents: list[str] = Field(default_factory=list)
+
+
+class WorldPressure(BaseModel):
+    """Layer-3 intent left unresolved when an arc closed."""
+
+    id: str
+    summary: str
+    origin_arc: str
+    entities: list[str] = Field(default_factory=list)
+    day_opened: int
+
+
+class StoryRuntime(BaseModel):
+    """Era + chronicle + arc chain state for the session."""
+
+    era: str | None = None
+    current_arc: str | None = None
+    chronicle: list[ChronicleEntry] = Field(default_factory=list)
+    arcs: list[ArcRecord] = Field(default_factory=list)
+    pressures: list[WorldPressure] = Field(default_factory=list)
+    world_flags: dict[str, bool] = Field(default_factory=dict)
 
 
 class ArcTimelineBeat(BaseModel):
@@ -287,15 +354,20 @@ class GameState(BaseModel):
     characters: dict[str, CharacterRuntime] = Field(default_factory=dict)
     locations: dict[str, LocationRuntime] = Field(default_factory=dict)
     situations: list[NpcKnowledgeFact] = Field(default_factory=list)
+    player_findings: list[NpcKnowledgeFact] = Field(
+        default_factory=list,
+        description="Fatti privati del PG da magie informative (output=info)",
+    )
     party_active: str | None = None
     fronts: dict[str, FrontRuntime] = Field(default_factory=dict)
+    story: StoryRuntime = Field(default_factory=StoryRuntime)
     episode: EpisodeRuntime = Field(default_factory=EpisodeRuntime)
     notoriety: NotorietyRuntime = Field(default_factory=NotorietyRuntime)
     turns_since_present_review: int = 0
     turns_since_consolidation: int = 0
     extra: dict[str, Any] = Field(default_factory=dict)
 
-    @field_validator("situations", mode="before")
+    @field_validator("situations", "player_findings", mode="before")
     @classmethod
     def _coerce_situations(cls, v: Any) -> list[NpcKnowledgeFact]:
         return coerce_fact_list(v)
