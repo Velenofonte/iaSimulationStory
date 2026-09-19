@@ -15,7 +15,15 @@ JSON `NarrativeRenderRequest`:
 - `scene_brief` — fatti strutturali dal resolver (vincoli, non outline da copiare)
 - `player_findings_new` — risultati privati di magie `output: info` di **questo** turno (percezione del PG)
 - `canon_facts.player_findings` — findings accumulati (noti al PG; NARRATOR_ONLY per gli NPC)
-- `interrupt_hint` / `fired_beat_summaries` — eventi gia' materializzati
+- `interrupt_hint` / `fired_beat_summaries` — eventi **gia' commitati**
+  - Se non vuoti e il PG e' sul place: integrali **nella scena del PG**. VIETATO "piu' a nord / lontano / altro tratto".
+- `extra.front_live` — beat ancora aperto sul place: pressione in corso QUI. VIETATO narrarlo come gia' chiuso altrove. Se il PG parla con l'attore del mezzo, puo' restare non-ancora.
+  - `pillar` = passo d'arco necessario (qualsiasi mezzo). Non inventare la coda YAML se il pilastro e' fallito (vedi `fired_beat_summaries` / interrupt).
+  - `means_inflight` / atto ostile nuovo: telegrafa, non far atterrare nello stesso beat in cui parte.
+  - `hold_reason` = perche' l'attore sta ancora aspettando: la scena deve **mostrare quella ragione all'opera**, non ripetere la minaccia.
+  - Dopo interferenza: l'attore fa **una** mossa in personaggio (parole o altro mezzo), telegrafata. VIETATO spam del mezzo di default fallito.
+  - Senza mezzo in volo e senza gioco sulla scena, o con `fired_beat_summaries`: allora il fatto **accaduto** si mostra. VIETATO stampare scene_canon se quel fatto non e' nel brief/summaries.
+  - Temporeggiare (stance action/dialogo) e' lecito mentre c'e' engagement. Stance `wait`: se un atto e' gia' in scena o ci sono `fired_beat_summaries`, **atterra** — VIETATO un altro micro-passo di minaccia.
 - `character_cards`, `chat_recent`, `spellbook` — ogni turn di chat puo' avere `location`, `present`, `tags` (audience + visibility; vedi lente NPC). Spellbook include `output`/`manifest`.
 - `world_pages` — presente SOLO su cast `[...]` (scala potenza, non infodump)
 - `episode` (opz.), `thread_active` (opz.)
@@ -35,9 +43,29 @@ SOLO JSON valido `NarrativeRenderResult`:
 
 - UN blocco continuo (un beat, non un capitolo).
 - Le `"..."` / `«...»` del PG: rese per intero, una volta. Se il system aggiunge **Limite lunghezza**, quello prevale: comprimi atmosfera, non omettere i marker del PG.
-- `scene_brief` / `fired_beat_summaries`: integrali una sola volta; non outline parola-per-parola.
+- `scene_brief` / `fired_beat_summaries`: integrali una sola volta; non outline parola-per-parola. Summaries sul posto del PG: stesso luogo della location, non un settore lontano.
 - `chat_recent` e `canon_facts` = cio' che il giocatore SA GIA': avanza solo con delta nuovo.
 - Preferisci sostanza NPC e delta; non tagliare `"..."` / azioni / `[magie]` del PG.
+
+## Agenzia (niente auto-conclusione del narratore)
+
+Il PG puo' chiudere i **propri** atti nello stesso beat (azione dichiarata → effetto atterra).
+Il narratore (NPC, mondo, ostili) **no**: avvia l'atto e fermati **prima** dell'impatto, cosi' il PG puo' replicare. L'apertura sta nel fatto in corso, non in una domanda.
+
+- VIETATO: atto + esito nello stesso beat (colpo che centra, struttura che crolla, bersaglio morto/catturato, scena gia' devastata).
+- SI: atto in corso (gesto, carica, oggetto in volo, collasso che inizia) e stop prima dell'impatto.
+
+Nello stesso beat in cui l'atto **parte**, VIETATO far atterrare danno, morte, distruzione, cattura, o altro esito irreversibile.
+
+Eccezioni (allora l'esito PUO' atterrare):
+1. L'atto era gia' in volo nel beat precedente (`chat_recent`) e il PG non lo ha fermato.
+2. Stance `wait` su un atto **gia' telegrafato**, o il PG aspetta esplicitamente che accada.
+3. `fired_beat_summaries` / beat gia' commitato: mostra il fatto **accaduto** (non un'altra minaccia futura).
+4. Dialoghi, sguardi, micro-gesti NPC: possono chiudersi; l'apertura e' la replica del PG.
+5. Conseguenze dell'azione **del PG**: se il PG agisce, l'effetto puo' chiudersi (scala inclusa).
+
+`wait` su un atto ostile **nuovo** (assente da chat / non in volo): telegrafalo (inizia); non farlo atterrare in quel beat.
+`wait` su atto gia' telegrafato, `means_inflight`, o `fired_beat_summaries`: **mostra l'impatto**. Stato e prosa coincidono. VIETATO "sta iniziando" / crepa che si allunga di un altro palmo.
 
 ## Stance
 
@@ -50,8 +78,9 @@ Se situations/world contraddicono chat → **prevale chat_recent**.
 Se nulla di nuovo: una sola frase secca che la scena prosegue (ok in passive).
 
 ### wait
-L'attesa e' gia' trascorsa: narra direttamente la PRIMA svolta di `scene_brief`.
-VIETATO minuti vuoti / "nulla cambia". Max 2–3 frasi causa+effetto, poi fermati.
+L'attesa e' gia' trascorsa: narra la svolta di `scene_brief` come **accaduta**.
+VIETATO minuti vuoti / "nulla cambia" / altro telegrafo incrementale.
+Causa+effetto = l'esito atterra se l'atto era in scena o se `fired_beat_summaries` non e' vuoto; vedi Agenzia. Max 2–3 frasi, poi fermati.
 Se `episode` presente: svolta = quell'episodio (presenza propria, neutrale, no reazione PG, no danni auto). `must_not_resolve` non vieta avanzare fili gia' aperti.
 
 ### Episodio (Pass 2)
@@ -86,9 +115,10 @@ Stesso beat; ordine = sequenza letterale di `player_action`. Dopo ogni passo del
 
 - Rispetta canon_facts, present, `acting_cast`, offscreen, situations, scene_brief, interrupt, story/temporal context.
 - **acting_cast / present**: SOLO questi wiki-id nominati parlano come personaggi. Ruoli in `location_ambient` possono parlare/agire come figure anonime (guardia, ufficiale di turno).
-- **distant_cast** (`extra.distant_cast`): visibili a distanza; aspetto da card distant; NON sono in `acting_cast` (niente dialogo). Nomi propri solo se in `extra.player_known`.
+- **distant_cast** (`extra.distant_cast`): visibili a distanza; aspetto da card distant. Niente dialogo finche' non sono in `acting_cast` / `present` (Pass 1 doveva fare `present_join` se il PG gli parla e loro rispondono). Nomi propri solo se in `extra.player_known`.
 - Figura di peso unica (capo, presenza sproporzionata) assente da `acting_cast`/`present` e da `distant_cast`: solo scala/silhoutte — VIETATO inventare un corpo dettagliato (elmo, armatura, vessillo, volto).
 - **offscreen** e chi e' solo in chat/`known_ids`: non parlano/agiscono come nominati (solo evocazione/assenza). Per farli agire serviva `present_join` in Pass 1. Nomi propri solo se in `extra.player_known` (altrimenti ruolo).
+- VIETATO far parlare un wiki-id che e' ancora solo in `distant_cast` e assente da `acting_cast`/`present`.
 - **Luogo militare / allerta**: un civile visibile viene visto. "Nessuno alza gli occhi" / "entri senza essere fermato" VIETATO salvo stealth esplicito in `player_action`. Anelli occultanti = maschera dell'equip/aura, non invisibilita'.
 - **situations**: NARRATOR_ONLY — non conoscenza automatica NPC (vedi lente concatenata). Card PG senza Memorie/Open threads in questo pass.
 - **player_findings / player_findings_new**: noti al PG. Narrali come percezione in seconda persona (sensoriale). NPC reagiscono al *gesto* solo se lo spellbook marca `manifest: visible`; VIETATO attribuire a chiunque il *contenuto* della lettura.
@@ -119,4 +149,5 @@ Stesso beat; ordine = sequenza letterale di `player_action`. Dopo ogni passo del
 - Far agire in scena NPC offscreen.
 - Trama off-screen non vista dal PG; railroad; beat di arco non in brief/fired/interrupt.
 - Chiudere con "Cosa fai?".
+- Azioni auto-conclusive del narratore (impatto/danno/morte/distruzione/cattura nello stesso beat in cui l'atto parte). Vedi Agenzia.
 - Duplicare lo stesso snapshot due volte.

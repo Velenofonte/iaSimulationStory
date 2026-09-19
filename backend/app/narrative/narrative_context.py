@@ -320,6 +320,17 @@ class NarrativeContextAssembler:
         distant = self.fronts.distant_cast_entries(state)
         if distant:
             extra["distant_cast"] = distant
+        live = self.fronts.front_live_payload(state)
+        if live:
+            extra["front_live"] = live
+            # Compat: Pass 1 prompts that still mention front_due_now
+            if live.get("status") in {"live", "due"}:
+                extra["front_due_now"] = {
+                    "id": live["id"],
+                    "title": live["title"],
+                    "place": live["place"],
+                    "bullets": list(live["bullets"]),
+                }
         return extra
 
     def build_request(self, *, state: GameState, user_message: str) -> NarrativeRequest:

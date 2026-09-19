@@ -64,7 +64,7 @@ def trim_chat_for_passive_render(chat: list[NarrativeChatTurn]) -> list[Narrativ
     """Riduce eco sul passivo TENENDO l'ultimo assistant (continuita' obbligatoria).
 
     Prima si rimuovevano gli ultimi 1-2 assistant: il render non vedeva l'impatto
-    appena narrato e poteva riavvolgere eventi (meteorite ancora in cielo, ecc.).
+    appena narrato e poteva riavvolgere un evento gia' concluso in scena.
     Ora si puo' togliere al massimo un assistant *penultimo*, mai l'ultimo beat.
     """
     trimmed = list(chat)

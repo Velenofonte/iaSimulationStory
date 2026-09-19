@@ -46,6 +46,7 @@ type StartView = "home" | "create";
 const ARC_STATUS_LABEL: Record<string, string> = {
   done: "fatto",
   current: "in corso",
+  live: "in scena",
   upcoming: "prossimo",
   skipped: "saltato",
 };
@@ -1001,6 +1002,18 @@ function App() {
                         <div className="arc-beat-head">
                           <span className={`arc-badge arc-badge-${beat.status}`}>
                             {ARC_STATUS_LABEL[beat.status] ?? beat.status}
+                          </span>
+                          <span
+                            className={`arc-badge ${
+                              beat.pillar ? "arc-badge-pillar" : "arc-badge-flexible"
+                            }`}
+                            title={
+                              beat.pillar
+                                ? "Passo obbligatorio per l'arco (qualsiasi mezzo)"
+                                : "Beat adattabile: se piegato l'arco può continuare"
+                            }
+                          >
+                            {beat.pillar ? "pilastro" : "flessibile"}
                           </span>
                           <strong>{beat.title}</strong>
                           {beat.due_time ? (

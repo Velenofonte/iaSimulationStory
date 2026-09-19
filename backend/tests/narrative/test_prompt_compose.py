@@ -53,6 +53,8 @@ def test_compose_narrative_render_includes_grammar_and_epistemic() -> None:
 def test_compose_review_present_includes_id_registry() -> None:
     text = LLMClient().compose_prompt("review_present")
     assert "PresentReviewResult" in text
+    assert "beat_commit" in text
+    assert "still_live" in text
     assert "Registro ID" in text
     assert "front_id" in text
     assert "max **6**" in text or "max **6** situations" in text
@@ -129,3 +131,35 @@ def test_compose_cast_and_travel_rules() -> None:
     assert "chat_recent` batte present stale" not in render
     assert "spostamento" in resolve
     assert "gilda-avventurieri" in present
+
+
+def test_compose_prompts_forbid_narrator_self_conclusive_actions() -> None:
+    resolve = LLMClient().compose_prompt("turn_resolve")
+    render = LLMClient().compose_prompt("narrative_render")
+    for text in (resolve, render):
+        assert "auto-conclusione" in text
+        assert "impatto" in text
+        assert "in corso" in text
+        assert "meteorite" not in text
+
+
+def test_compose_front_due_now_and_on_site_summaries() -> None:
+    resolve = LLMClient().compose_prompt("turn_resolve")
+    render = LLMClient().compose_prompt("narrative_render")
+    assert "front_live" in resolve or "front_due_now" in resolve
+    assert "beat_commit" in resolve
+    assert "means_inflight" in resolve
+    assert "pillar_failed" in resolve
+    assert "hold_reason" in resolve
+    assert "hold_reason" in render
+    assert "still_live" in resolve
+    assert "canon_facts.location" in resolve
+    assert "settore" in resolve or "tratto" in resolve
+    assert "fired_beat_summaries" in render
+    assert "front_live" in render
+    assert "settore" in render or "tratto" in render or "lontano" in render
+    assert "means_inflight" in render or "in volo" in render
+    assert "spam" in resolve or "un mezzo" in resolve
+    assert "atterra" in resolve or "atterrare" in resolve
+    assert "VIETATO `still_live` su wait" in resolve or "still_live` su wait" in resolve
+    assert "micro" in render or "atterra" in render

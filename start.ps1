@@ -37,7 +37,7 @@ if (-not (Test-Path (Join-Path $FrontendDir "node_modules"))) {
 # Dev: API via proxy Vite (/api) — non forzare 127.0.0.1
 Remove-Item Env:VITE_API_BASE -ErrorAction SilentlyContinue
 
-Write-Host "Backend  http://0.0.0.0:8000  (LAN: http://<IP-PC>:8000)" -ForegroundColor Cyan
+Write-Host "Backend  http://0.0.0.0:8001  (LAN: http://<IP-PC>:8001)" -ForegroundColor Cyan
 Write-Host "Frontend http://localhost:5173  (telefono: http://<IP-PC>:5173)" -ForegroundColor Cyan
 Write-Host "PWA sul telefono: in Chrome abilita unsafely-treat-insecure-origin-as-secure per quell'URL." -ForegroundColor DarkGray
 Write-Host "Ctrl+C per fermare entrambi.`n" -ForegroundColor DarkGray
@@ -45,7 +45,7 @@ Write-Host "Ctrl+C per fermare entrambi.`n" -ForegroundColor DarkGray
 $backend = Start-Process -FilePath $Python -ArgumentList @(
     "-m", "uvicorn", "app.main:app",
     "--reload", "--app-dir", ".",
-    "--host", "0.0.0.0", "--port", "8000"
+    "--host", "0.0.0.0", "--port", "8001"
 ) -WorkingDirectory $BackendDir -PassThru -NoNewWindow
 
 $frontend = Start-Process -FilePath "npm.cmd" -ArgumentList @(

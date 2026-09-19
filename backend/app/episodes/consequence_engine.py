@@ -275,6 +275,16 @@ class ConsequenceEngine:
         apply_scene_delta(state, delta)
         if delta.front_impacts:
             self.fronts.apply_impacts(state, delta.front_impacts)
+        if result.beat_commit is not None:
+            path = (result.beat_commit.path or "still_live").strip().lower()
+            if path in {"canon", "alt"}:
+                note = result.beat_commit.note
+                outcome = self.fronts.commit_live_beat(
+                    state, path=path, note=note, hydrate_scene=True
+                )
+                from app.turn.state_reducer import apply_front_outcome
+
+                apply_front_outcome(state, outcome)
 
     def run_consolidation_review(self, state: GameState) -> ConsolidationReviewResult | None:
         self.last_review_tokens = 0

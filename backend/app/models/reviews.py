@@ -12,6 +12,27 @@ from app.models.game_state import (
 )
 
 
+class BeatCommit(BaseModel):
+    """How a live arc beat closes (or stays open) at the player's place."""
+
+    path: Literal["still_live", "canon", "alt", "pillar_failed", "skip"] = "still_live"
+    note: str | None = Field(
+        default=None,
+        description=(
+            "Breve nota sul path (alt: mezzo diverso che compie il passo; "
+            "still_live: perche' resta aperto; pillar_failed: passo pilastro non accaduto; "
+            "skip: beat non-pilastro piegato, coda continua)"
+        ),
+    )
+    means_inflight: bool = Field(
+        default=False,
+        description=(
+            "True se un atto ostile del narratore e' partito in questo turno "
+            "ma non e' ancora atterrato (telegrafo; il PG puo' replicare)"
+        ),
+    )
+
+
 class CharacterPresentUpdate(BaseModel):
     location: str | None = None
     mood: str | None = None
@@ -92,7 +113,7 @@ class FrontImpact(BaseModel):
     evidence: str | None = None
     flags_set: dict[str, bool] | None = Field(
         default=None,
-        description="Flag arco da impostare (es. carne_intact: false).",
+        description="Flag arco da impostare (nomi dal YAML del front, es. <luogo>_intact: false).",
     )
 
 
@@ -176,7 +197,15 @@ class PresentReviewResult(BaseModel):
         default_factory=list,
         description=(
             "Impatti sull'arco attivo: null|distort|block rispetto a un intent_id di strato 2. "
-            "Per distruggere Carne: block pressure_village con flags_set.carne_intact=false."
+            "flags_set opzionale per flag YAML del beat."
+        ),
+    )
+    beat_commit: BeatCommit | None = Field(
+        default=None,
+        description=(
+            "Se un beat era live sul place e la chat lo ha risolto/piegato: "
+            "{path: still_live|canon|alt, note?}. Fatti in chat battono lo stato. "
+            "null se non c'e' finestra live o resta aperta senza chiusura."
         ),
     )
     # Chiavi libere nel game_state.extra (nuove o aggiornate)

@@ -29,6 +29,11 @@ class FrontBeat:
     clear_flags: list[str]
     prompt_inject: str = ""
     resolves_arc: str | None = None
+    stickiness: str = "normal"  # high|normal — high prefers canon path unless clear PC interference
+    # Pillar = arc step that must happen (any means). Missing → arc breaks / new story.
+    # Pack authors set pillar: true on beats in stories/<id>/wiki/fronts/*.yaml; the
+    # engine reads only the flag (no hard-coded beat ids or setting lore).
+    pillar: bool = False
     due_abs_minutes: int = 0
     raw: dict[str, Any] = field(default_factory=dict)
 
@@ -122,6 +127,9 @@ def _parse_beat(raw: dict[str, Any]) -> FrontBeat:
     wiki_writes = on_fire.get("wiki_writes") or []
     if not isinstance(wiki_writes, list):
         wiki_writes = []
+    stick_raw = str(raw.get("stickiness") or "").strip().lower()
+    stickiness = stick_raw if stick_raw in {"high", "normal"} else ""
+    pillar = bool(raw.get("pillar", False))
     return FrontBeat(
         id=beat_id,
         title=str(raw.get("title") or beat_id),
@@ -139,6 +147,8 @@ def _parse_beat(raw: dict[str, Any]) -> FrontBeat:
         clear_flags=clear_flags,
         prompt_inject=str(raw.get("prompt_inject") or "").strip(),
         resolves_arc=raw.get("resolves_arc"),
+        stickiness=stickiness or "normal",
+        pillar=pillar,
         raw=raw,
     )
 
@@ -151,6 +161,9 @@ def parse_front_dict(data: dict[str, Any]) -> FrontDefinition:
     if not isinstance(raw_beats, list) or not raw_beats:
         raise ValueError(f"front {front_id} missing beats")
     beats = [_parse_beat(b) for b in raw_beats if isinstance(b, dict)]
+    for i, beat in enumerate(beats):
+        if "stickiness" not in (beat.raw or {}):
+            beat.stickiness = "high" if i == 0 else "normal"
     beat_by_id = {b.id: b for b in beats}
     start = data.get("start") or {}
     start_beat = str(start.get("beat") or beats[0].id)

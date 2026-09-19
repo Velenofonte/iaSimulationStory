@@ -24,7 +24,7 @@ from app.models.narrative import (
     NarrativeTime,
     NarrativeWorldPage,
 )
-from app.models.reviews import CharacterPresentUpdate, FrontImpact, LocationPresentUpdate
+from app.models.reviews import BeatCommit, CharacterPresentUpdate, FrontImpact, LocationPresentUpdate
 
 
 class TurnResolution(BaseModel):
@@ -54,6 +54,14 @@ class TurnResolution(BaseModel):
     deed: DeedRecord | None = Field(
         default=None,
         description="Impresa notabile di questo turno (scala id dal pack); null se nessuna",
+    )
+    beat_commit: BeatCommit | None = Field(
+        default=None,
+        description=(
+            "Se c'e' un beat live/due sul place del PG: "
+            "still_live|canon|alt|pillar_failed|skip. "
+            "null = inferenza pipeline (still_live se live; wait con mezzo in volo puo' atterrare)."
+        ),
     )
 
     @field_validator("spells", mode="before")
@@ -252,6 +260,10 @@ class FrontOutcome(BaseModel):
     """Deterministic front tick side-effects (no direct state writes)."""
 
     fired_beats: list[str] = Field(default_factory=list)
+    live_beats: list[str] = Field(
+        default_factory=list,
+        description="Beats entered live (on-site, not yet committed)",
+    )
     situations_add: list[NpcKnowledgeFact] = Field(default_factory=list)
     characters_add: list[str] = Field(default_factory=list)
     characters_nearby: dict[str, str] = Field(
@@ -272,6 +284,7 @@ class FrontOutcome(BaseModel):
 
     @field_validator(
         "fired_beats",
+        "live_beats",
         "characters_add",
         "wiki_patches",
         "beat_summaries",

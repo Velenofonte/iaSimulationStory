@@ -124,7 +124,14 @@ class FrontEngine:
         )
         state.day, state.minutes = day_minutes_from_abs(max_due)
         sync_time_label(state)
-        self.tick(state, 0, front_ids=[definition.id], hydrate_scene=False)
+        # Off-camera seed: never open a live window — fire the default queue.
+        self.tick(
+            state,
+            0,
+            front_ids=[definition.id],
+            hydrate_scene=False,
+            allow_live=False,
+        )
 
         runtime = state.fronts[definition.id]
         if runtime.status in {"active", "diverted"}:
@@ -146,11 +153,15 @@ class FrontEngine:
         front_ids: list[str] | None = None,
         hydrate_scene: bool = True,
         defer_presence: bool = False,
+        allow_live: bool = True,
     ) -> FrontOutcome:
         """Advance front runtime; return scene/wiki side-effects without applying them.
 
         Mutates front cursors/flags/status only. Does not touch situations,
         characters_active, locations, or wiki files.
+
+        ``allow_live=False`` forces off-camera fire even if the PG is on the beat
+        place (used by ``seed_world_after_arc``).
         """
         del delta_minutes  # clock is advanced by caller; gate is absolute due
         outcome = FrontOutcome()
@@ -200,6 +211,33 @@ class FrontEngine:
                 if defer_presence and player_at_place(state.player.location, beat.place):
                     break
 
+                # Already live at this cursor: stay until commit (do not re-fire).
+                # Whether the window survives another turn is decided by the turn
+                # content (see ``live_commit_path``), not by a timer here.
+                if runtime.live_beat_id == beat.id:
+                    if allow_live and player_at_place(state.player.location, beat.place):
+                        outcome.live_beats.append(beat.id)
+                        break
+                    # Left the place while live — commit off-camera below via explicit call;
+                    # if we reach here without prior leave commit, fire off-site now.
+                    self._clear_live(runtime)
+
+                on_site = player_at_place(state.player.location, beat.place)
+                is_start_immediate = (
+                    runtime.last_fired_beat is None
+                    and float(beat.hours_after_previous or 0) == 0
+                    and beat.id == definition.start_beat
+                )
+                if (
+                    allow_live
+                    and on_site
+                    and not defer_presence
+                    and not is_start_immediate
+                ):
+                    # Enter live participation window: pressure on-site, no commit yet.
+                    self._enter_live(state, runtime, beat, outcome, now_abs=now_abs)
+                    break
+
                 fire_data = self._fire_collect(
                     state,
                     definition,
@@ -207,26 +245,8 @@ class FrontEngine:
                     beat,
                     hydrate_scene=hydrate_scene,
                 )
-                outcome.fired_beats.append(beat.id)
-                outcome.wiki_patches.extend(fire_data["wiki_patches"])
-                outcome.beat_summaries.extend(fire_data["beat_summaries"])
-                outcome.situations_add.extend(
-                    coerce_fact_list(fire_data["situations_add"])
-                )
-                outcome.characters_add.extend(fire_data["characters_add"])
-                for cid, loc in fire_data.get("characters_nearby", {}).items():
-                    outcome.characters_nearby[cid] = loc
-                for loc_id, roles in fire_data.get("location_ambient", {}).items():
-                    outcome.location_ambient.setdefault(loc_id, [])
-                    outcome.location_ambient[loc_id] = list(
-                        dict.fromkeys(outcome.location_ambient[loc_id] + list(roles))
-                    )
-                for loc_id, events in fire_data["location_events"].items():
-                    outcome.location_events.setdefault(loc_id, []).extend(events)
-                for loc_id, atmosphere in fire_data["location_atmosphere"].items():
-                    outcome.location_atmosphere[loc_id] = atmosphere
-                for cid, loc in fire_data["character_locations"].items():
-                    outcome.character_locations[cid] = loc
+                self._merge_fire_into_outcome(outcome, fire_data, beat_id=beat.id)
+                self._clear_live(runtime)
 
                 if beat.resolves_arc:
                     runtime.status = "resolved"
@@ -275,6 +295,7 @@ class FrontEngine:
         front_ids: list[str] | None = None,
         hydrate_scene: bool = True,
         defer_presence: bool = False,
+        allow_live: bool = True,
     ) -> list[str]:
         """Backward-compatible tick: resolve, apply scene hydrate, write wiki."""
         outcome = self.resolve_tick(
@@ -283,6 +304,7 @@ class FrontEngine:
             front_ids=front_ids,
             hydrate_scene=hydrate_scene,
             defer_presence=defer_presence,
+            allow_live=allow_live,
         )
         apply_front_outcome(state, outcome)
         if outcome.wiki_patches:
@@ -302,8 +324,19 @@ class FrontEngine:
         )
 
     def minutes_to_next_hydratable_beat(self, state: GameState) -> int | None:
-        """Minutes until the next beat that would hydrate at the player's place."""
-        soonest: int | None = None
+        """Minutes until the next beat that would hydrate at the player's place.
+
+        When a beat is already ``live`` on-site, returns None so the clock can
+        advance scene minutes without capping to a fire (commit is separate).
+        """
+        if self._any_live_on_site(state):
+            return None
+        info = self.next_hydratable_beat_at_player(state)
+        return None if info is None else int(info["due_in_minutes"])
+
+    def next_hydratable_beat_at_player(self, state: GameState) -> dict[str, Any] | None:
+        """Soonest pending beat at the player's place (due_in_minutes + scene bullets)."""
+        soonest: dict[str, Any] | None = None
         now_abs = absolute_minutes(state.day, state.minutes)
         for front_id, runtime in state.fronts.items():
             if not runtime or runtime.status not in {"active", "diverted"}:
@@ -344,8 +377,18 @@ class FrontEngine:
 
                 if player_at_place(state.player.location, beat.place):
                     wait = max(0, self._beat_due(runtime, beat) - now_abs)
-                    if soonest is None or wait < soonest:
-                        soonest = wait
+                    candidate = {
+                        "id": beat.id,
+                        "title": beat.title or beat.id,
+                        "place": beat.place,
+                        "due_in_minutes": wait,
+                        "bullets": scene_canon_to_bullets(beat.scene_canon, limit=3),
+                        "front_id": front_id,
+                        "stickiness": beat.stickiness,
+                        "pillar": bool(beat.pillar),
+                    }
+                    if soonest is None or wait < int(soonest["due_in_minutes"]):
+                        soonest = candidate
                     break
 
                 for key in beat.set_flags:
@@ -362,6 +405,337 @@ class FrontEngine:
                     break
                 cursor = definition.beats[idx + 1].id
         return soonest
+
+    def front_due_now_payload(self, state: GameState) -> dict[str, Any] | None:
+        """Beat already in its window at the player's place (legacy alias)."""
+        live = self.front_live_payload(state)
+        if live is None:
+            return None
+        return {
+            "id": live["id"],
+            "title": live["title"],
+            "place": live["place"],
+            "bullets": list(live["bullets"]),
+        }
+
+    def front_live_payload(self, state: GameState) -> dict[str, Any] | None:
+        """Live or due-now beat at the player's place for Pass 1/2 ``extra.front_live``."""
+        for front_id, runtime in state.fronts.items():
+            if not runtime or runtime.status not in {"active", "diverted"}:
+                continue
+            if not runtime.live_beat_id:
+                continue
+            try:
+                definition = self.loader.load(front_id)
+            except FileNotFoundError:
+                continue
+            beat = definition.beat_by_id.get(runtime.live_beat_id)
+            if not beat or not player_at_place(state.player.location, beat.place):
+                continue
+            return {
+                "id": beat.id,
+                "title": beat.title or beat.id,
+                "place": beat.place,
+                "bullets": scene_canon_to_bullets(beat.scene_canon, limit=3),
+                "front_id": front_id,
+                "stickiness": beat.stickiness,
+                "pillar": bool(beat.pillar),
+                "status": "live",
+                # Why the actor is still waiting; it must be re-earned each turn.
+                "hold_reason": runtime.live_hold_reason,
+                "hold_needs_new_fact": True,
+                "interference": bool(runtime.live_interference),
+                "means_inflight": bool(runtime.live_means_inflight),
+            }
+        info = self.next_hydratable_beat_at_player(state)
+        if info is None or int(info["due_in_minutes"]) != 0:
+            return None
+        return {
+            "id": info["id"],
+            "title": info["title"],
+            "place": info["place"],
+            "bullets": list(info["bullets"]),
+            "front_id": info["front_id"],
+            "stickiness": info.get("stickiness") or "normal",
+            "pillar": bool(info.get("pillar", False)),
+            "status": "due",
+            "hold_reason": None,
+            "hold_needs_new_fact": True,
+            "interference": False,
+            "means_inflight": False,
+        }
+
+    def _any_live_on_site(self, state: GameState) -> bool:
+        for runtime in state.fronts.values():
+            if not runtime or not runtime.live_beat_id:
+                continue
+            if runtime.status not in {"active", "diverted"}:
+                continue
+            try:
+                definition = self.loader.load(runtime.id)
+            except FileNotFoundError:
+                continue
+            beat = definition.beat_by_id.get(runtime.live_beat_id)
+            if beat and player_at_place(state.player.location, beat.place):
+                return True
+        return False
+
+    def live_beat_place(self, state: GameState) -> str | None:
+        """Place id of the on-site live beat, if any."""
+        for runtime in state.fronts.values():
+            if not runtime or not runtime.live_beat_id:
+                continue
+            try:
+                definition = self.loader.load(runtime.id)
+            except FileNotFoundError:
+                continue
+            beat = definition.beat_by_id.get(runtime.live_beat_id)
+            if beat:
+                return beat.place
+        return None
+
+    def commit_live_beat(
+        self,
+        state: GameState,
+        *,
+        path: str = "canon",
+        note: str | None = None,
+        hydrate_scene: bool = True,
+    ) -> FrontOutcome:
+        """Commit the live beat (canon/alt/skip/pillar_failed) or no-op for still_live.
+
+        ``canon`` — default on_fire path when the written step happened.
+        ``alt`` — other means completed the step; marks that belong to the step
+        still apply, but closing wiki/location_events from scene_canon are not
+        stamped as if the default means already happened.
+        ``skip`` — non-pillar beat bent; advance cursor without full on_fire.
+        ``pillar_failed`` — pillar step did not happen; interrupt arc (new story).
+        """
+        outcome = FrontOutcome()
+        path_norm = (path or "canon").strip().lower()
+        if path_norm == "still_live":
+            return outcome
+
+        for front_id, runtime in list(state.fronts.items()):
+            if not runtime or runtime.status not in {"active", "diverted"}:
+                continue
+            if not runtime.live_beat_id:
+                continue
+            try:
+                definition = self.loader.load(front_id)
+            except FileNotFoundError:
+                continue
+            beat = definition.beat_by_id.get(runtime.live_beat_id)
+            if not beat:
+                self._clear_live(runtime)
+                continue
+
+            if path_norm == "pillar_failed":
+                self._fail_pillar(
+                    state,
+                    definition,
+                    runtime,
+                    beat,
+                    outcome,
+                    note=note,
+                )
+                break
+
+            if path_norm == "skip":
+                self._skip_non_pillar(
+                    state,
+                    definition,
+                    runtime,
+                    beat,
+                    outcome,
+                    note=note,
+                )
+                break
+
+            self._commit_beat_now(
+                state,
+                definition,
+                runtime,
+                beat,
+                outcome,
+                path=path_norm,
+                note=note,
+                hydrate_scene=hydrate_scene,
+            )
+            break
+
+        outcome.situations_add = _dedupe_facts(list(outcome.situations_add))
+        outcome.characters_add = list(dict.fromkeys(outcome.characters_add))
+        outcome.beat_summaries = list(dict.fromkeys(outcome.beat_summaries))
+        for loc_id, events in list(outcome.location_events.items()):
+            outcome.location_events[loc_id] = list(dict.fromkeys(events))
+        return outcome
+
+    def _fail_pillar(
+        self,
+        state: GameState,
+        definition: FrontDefinition,
+        runtime: FrontRuntime,
+        beat: FrontBeat,
+        outcome: FrontOutcome,
+        *,
+        note: str | None,
+    ) -> None:
+        """Pillar step missing: interrupt the front; do not fire scene_canon."""
+        note_line = (note or "pillar step did not happen; arc breaks").strip()
+        if note_line:
+            runtime.distortion_notes.append(note_line.splitlines()[0][:200])
+        outcome.beat_summaries.append(note_line.splitlines()[0][:200])
+        runtime.status = "interrupted"
+        runtime.interrupted_at_day = state.day
+        self._clear_live(runtime)
+        if self.story is not None:
+            self.story.on_arc_closed(state, definition.id, forced_outcome="broken")
+
+    def _skip_non_pillar(
+        self,
+        state: GameState,
+        definition: FrontDefinition,
+        runtime: FrontRuntime,
+        beat: FrontBeat,
+        outcome: FrontOutcome,
+        *,
+        note: str | None,
+    ) -> None:
+        """Non-pillar beat bent: advance the queue without stamping scene_canon."""
+        note_line = (note or "non-pillar beat skipped; queue continues").strip()
+        if note_line:
+            runtime.distortion_notes.append(note_line.splitlines()[0][:200])
+        if runtime.status == "active":
+            runtime.status = "diverted"
+        outcome.beat_summaries.append(note_line.splitlines()[0][:200])
+        # Soft progress markers only — no wiki_writes / location_events from canon.
+        for key in beat.set_flags:
+            # Prefer *_done style marks so prereqs of later beats can proceed.
+            if key.endswith("_done") or key.startswith("intent_"):
+                runtime.flags[key] = True
+        runtime.last_fired_beat = beat.id
+        runtime.last_fired_at_day = state.day
+        runtime.last_fired_at_minutes = state.minutes
+        self._clear_live(runtime)
+        if beat.resolves_arc:
+            runtime.status = "resolved"
+            if self.story is not None:
+                self.story.on_arc_closed(state, definition.id)
+        elif not self._advance_cursor(definition, runtime):
+            runtime.status = "resolved"
+            if self.story is not None:
+                self.story.on_arc_closed(state, definition.id)
+
+    @staticmethod
+    def _clear_live(runtime: FrontRuntime) -> None:
+        runtime.live_beat_id = None
+        runtime.live_started_abs = None
+        runtime.live_hold_reason = None
+        runtime.live_progress_key = None
+        runtime.live_interference = False
+        runtime.live_means_inflight = False
+
+    def live_runtime_on_site(self, state: GameState) -> FrontRuntime | None:
+        """Runtime whose live beat is at the player's place, if any."""
+        for runtime in state.fronts.values():
+            if not runtime or not runtime.live_beat_id:
+                continue
+            if runtime.status not in {"active", "diverted"}:
+                continue
+            try:
+                definition = self.loader.load(runtime.id)
+            except FileNotFoundError:
+                continue
+            beat = definition.beat_by_id.get(runtime.live_beat_id)
+            if beat and player_at_place(state.player.location, beat.place):
+                return runtime
+        return None
+
+    def live_beat_definition(
+        self, state: GameState
+    ) -> tuple[FrontRuntime, FrontDefinition, FrontBeat] | None:
+        """On-site live runtime + definition + beat, if any."""
+        runtime = self.live_runtime_on_site(state)
+        if runtime is None or not runtime.live_beat_id:
+            return None
+        try:
+            definition = self.loader.load(runtime.id)
+        except FileNotFoundError:
+            return None
+        beat = definition.beat_by_id.get(runtime.live_beat_id)
+        if not beat:
+            return None
+        return runtime, definition, beat
+
+    def live_commit_path(
+        self,
+        state: GameState,
+        *,
+        proposed: str | None,
+        progress_key: str,
+        hold_reason: str | None = None,
+        engagement: bool = False,
+        means_inflight: bool = False,
+        allow_land: bool = False,
+    ) -> str | None:
+        """Decide how a live beat resolves from what this turn actually produced.
+
+        Engagement (dialogue with the actor, cast, scene play) or a means still
+        in flight keeps ``still_live``. Empty progress alone does **not** force
+        canon while the PC is still playing the scene. Landing (canon/alt) needs
+        an explicit propose or ``allow_land`` (e.g. wait while means is inflight).
+        """
+        packed = self.live_beat_definition(state)
+        if packed is None:
+            return None
+        runtime, _definition, beat = packed
+        proposed_norm = (proposed or "").strip().lower() or "still_live"
+
+        if means_inflight:
+            runtime.live_means_inflight = True
+
+        if proposed_norm == "pillar_failed":
+            if beat.pillar:
+                return "pillar_failed"
+            # Non-pillar "failed" written scene → skip ahead, queue continues.
+            return "skip"
+
+        if proposed_norm == "skip":
+            return "skip" if not beat.pillar else "pillar_failed"
+
+        # Landing: explicit canon/alt when allowed (wait while inflight, or no inflight).
+        if proposed_norm in {"canon", "alt"}:
+            if runtime.live_means_inflight and not allow_land and proposed_norm != "alt":
+                # Hostile act still in the air — do not stamp on_fire yet.
+                if hold_reason is not None:
+                    runtime.live_hold_reason = (hold_reason or "").strip() or None
+                return "still_live"
+            runtime.live_means_inflight = False
+            if runtime.live_interference and proposed_norm == "canon":
+                return "alt"
+            return "alt" if runtime.live_interference else proposed_norm
+
+        # still_live (or unknown): hold if the scene is still being played.
+        renew = (
+            engagement
+            or runtime.live_means_inflight
+            or bool(progress_key and progress_key != (runtime.live_progress_key or ""))
+        )
+        if renew:
+            if progress_key and progress_key != (runtime.live_progress_key or ""):
+                runtime.live_progress_key = progress_key
+            if hold_reason is not None:
+                runtime.live_hold_reason = (hold_reason or "").strip() or None
+            return "still_live"
+
+        # Empty wait / allow_land with nothing left to play: actor may resolve.
+        # Do not force canon on mere progress-key echo while the window is open.
+        if allow_land:
+            if runtime.live_interference:
+                return "alt"
+            return "canon"
+        return "still_live"
 
     def apply_impacts(self, state: GameState, impacts: list[FrontImpact]) -> None:
         """Apply typed front impacts from present review (phase 2)."""
@@ -384,6 +758,10 @@ class FrontEngine:
             runtime = state.fronts.get(impact.front_id)
             if not runtime:
                 continue
+            # A typed impact on a live beat is the "clear interference" signal:
+            # the default means gets bent (alt) instead of playing out as canon.
+            if runtime.live_beat_id:
+                runtime.live_interference = True
             intent_flag = f"intent_{impact.intent_id}"
             if impact.effect == "block":
                 if intent_flag in runtime.flags:
@@ -439,6 +817,8 @@ class FrontEngine:
                 due_time = format_due_day(due_day)
                 if runtime.status == "interrupted" and beat.id not in fired:
                     status: str = "skipped"
+                elif runtime.live_beat_id and beat.id == runtime.live_beat_id:
+                    status = "live"
                 elif 0 <= i < cursor_idx and beat.id not in fired:
                     status = "skipped"
                 elif (
@@ -478,6 +858,7 @@ class FrontEngine:
                         hours_after_previous=beat.hours_after_previous,
                         estimated_day=due_day,
                         due_time=due_time,
+                        pillar=bool(beat.pillar),
                     )
                 )
             fronts.append(
@@ -532,11 +913,39 @@ class FrontEngine:
                 if pending.prompt_inject:
                     lines.append(pending.prompt_inject.strip())
                 now_abs = absolute_minutes(state.day, state.minutes)
-                if now_abs >= self._beat_due(runtime, pending):
+                if runtime.live_beat_id == pending.id:
                     lines.append(
-                        "Fatto GIA' nella finestra del giorno: materializzalo in questa "
-                        "risposta se il PG e' nel place. Scegli l'ora/atmosfera che ha "
-                        "piu' senso per la scena (non citare orologi o 'Giorno N' nel text)."
+                        "Beat LIVE sul place del PG: pressione in corso QUI "
+                        f"(`canon_facts.location`; place={pending.place}). "
+                        "Il metodo di default e' in scene_canon ma NON e' ancora commitato. "
+                        "VIETATO narrarlo come gia' accaduto altrove / altro settore."
+                    )
+                    if pending.pillar:
+                        lines.append(
+                            "Questo beat e' un PILASTRO: il passo deve accadere "
+                            "(mezzo di default o altro). Se il passo non accade → "
+                            "pillar_failed (arco spezzato). Un mezzo alla volta; "
+                            "vietato spam del mezzo di default fallito."
+                        )
+                    lines.append(
+                        "Onora still_live se il PG gioca sulla scena (dialogo con "
+                        "l'attore, cast, magia, mezzo in volo). Un atto ostile nuovo "
+                        "si telegrafa (means_inflight); non commitare on_fire finche' "
+                        "non atterra. Wait su mezzo in volo puo' farlo atterrare."
+                    )
+                    if runtime.live_means_inflight:
+                        lines.append(
+                            "Mezzo GIA' in volo: non rifare lo stesso telegrafo; "
+                            "il PG puo' intercettare o aspettare l'impatto."
+                        )
+                    if runtime.live_hold_reason:
+                        lines.append(f"Motivo dell'attesa in corso: {runtime.live_hold_reason}")
+                elif now_abs >= self._beat_due(runtime, pending):
+                    lines.append(
+                        "Fatto GIA' nella finestra sul place del PG: apri la pressione QUI "
+                        f"(`canon_facts.location`; place={pending.place}). "
+                        "Non chiudere l'esito altrove. Commit solo se la scena lo risolve "
+                        "(canon/alt); altrimenti still_live."
                     )
 
             cast_now, cast_not_yet = self._cast_split(definition, runtime, state=state)
@@ -574,7 +983,7 @@ class FrontEngine:
                 lines.append("Sfondo (strato 3, non spegnibile localmente): " + " | ".join(summaries[:3]))
             lines.append(
                 "VIETATO: anticipare i FATTI del prossimo beat (on_fire, collassi, morti, "
-                "meteoriti, chiusure); anticipare il GIORNO del fatto; far spuntare NPC "
+                "chiusure); anticipare il GIORNO del fatto; far spuntare NPC "
                 "fuori luogo; far parlare i nearby nominati se il PG parla a una "
                 "guardia/ruolo ambient. "
                 "LICEITO: aspetto wiki di `extra.distant_cast` se il PG osserva quella "
@@ -643,12 +1052,12 @@ class FrontEngine:
             if not player_at_place(state.player.location, pending.place):
                 continue
             fired_ids = self._fired_beat_ids(definition, runtime)
-            symptoms = pending.raw.get("if_player_present") == "narrate_symptoms_or_edge"
+            # Distant = observable until Pass 1 joins them (dialogue / engagement).
+            # ``narrate_symptoms_or_edge`` only skips auto cast_acting on fire/hydrate;
+            # it does not forbid present_join when the PC opens talk.
             for cast_key in pending.cast_in_world:
                 member = definition.cast.get(cast_key)
                 if not member or not member.wiki:
-                    continue
-                if symptoms and cast_key in {"ainz", "albedo"}:
                     continue
                 if member.appear_from in fired_ids:
                     continue
@@ -838,6 +1247,133 @@ class FrontEngine:
         idx = next((i for i, b in enumerate(definition.beats) if b.id == runtime.cursor_beat), -1)
         return 0 <= idx < len(definition.beats) - 1
 
+    def _commit_beat_now(
+        self,
+        state: GameState,
+        definition: FrontDefinition,
+        runtime: FrontRuntime,
+        beat: FrontBeat,
+        outcome: FrontOutcome,
+        *,
+        path: str,
+        note: str | None,
+        hydrate_scene: bool,
+    ) -> None:
+        """Fire the beat and advance the cursor (shared by clock and commit paths)."""
+        note_line = ""
+        if path == "alt":
+            if runtime.status == "active":
+                runtime.status = "diverted"
+            note_line = (note or "alt path: default means bent; pressure continues").strip()
+            if note_line:
+                runtime.distortion_notes.append(note_line.splitlines()[0][:200])
+
+        fire_data = self._fire_collect(
+            state,
+            definition,
+            runtime,
+            beat,
+            hydrate_scene=hydrate_scene,
+        )
+        if path == "alt":
+            # Do not stamp closing location_events as if the default means already
+            # happened off-site; keep nearby/ambient/atmosphere pressure.
+            fire_data = dict(fire_data)
+            fire_data["location_events"] = {}
+            fire_data["wiki_patches"] = []
+            bullets = scene_canon_to_bullets(beat.scene_canon, limit=1)
+            fire_data["beat_summaries"] = [
+                note_line if note_line else (bullets[0] if bullets else beat.title)
+            ]
+
+        self._merge_fire_into_outcome(outcome, fire_data, beat_id=beat.id)
+        self._clear_live(runtime)
+
+        if beat.resolves_arc:
+            runtime.status = "resolved"
+            if self.story is not None:
+                self.story.on_arc_closed(state, definition.id)
+        elif not self._advance_cursor(definition, runtime):
+            runtime.status = "resolved"
+            if self.story is not None:
+                self.story.on_arc_closed(state, definition.id)
+
+    def _enter_live(
+        self,
+        state: GameState,
+        runtime: FrontRuntime,
+        beat: FrontBeat,
+        outcome: FrontOutcome,
+        *,
+        now_abs: int,
+    ) -> None:
+        """Open on-site participation: pressure hydrate without committing marks/wiki."""
+        runtime.live_beat_id = beat.id
+        runtime.live_started_abs = now_abs
+        outcome.live_beats.append(beat.id)
+        try:
+            definition = self.loader.load(runtime.id)
+        except FileNotFoundError:
+            return
+        bullets = scene_canon_to_bullets(beat.scene_canon, limit=2)
+        hydrate = self._hydrate_collect(
+            definition,
+            beat,
+            bullets,
+            player_present=True,
+            acting_cast=False,
+            pressure_only=True,
+        )
+        for loc_id, atm in hydrate["location_atmosphere"].items():
+            # Prefer player location stamp when subplace
+            outcome.location_atmosphere[loc_id] = atm
+            if state.player.location and state.player.location != loc_id:
+                if player_at_place(state.player.location, beat.place):
+                    outcome.location_atmosphere[state.player.location] = atm
+        for loc_id, roles in hydrate["location_ambient"].items():
+            outcome.location_ambient.setdefault(loc_id, [])
+            outcome.location_ambient[loc_id] = list(
+                dict.fromkeys(outcome.location_ambient[loc_id] + list(roles))
+            )
+            if state.player.location and player_at_place(state.player.location, beat.place):
+                pl = state.player.location
+                outcome.location_ambient.setdefault(pl, [])
+                outcome.location_ambient[pl] = list(
+                    dict.fromkeys(outcome.location_ambient[pl] + list(roles))
+                )
+        for cid, loc in hydrate["characters_nearby"].items():
+            outcome.characters_nearby[cid] = loc
+            outcome.character_locations[cid] = loc
+        # No location_events / wiki / marks — beat not committed.
+
+    @staticmethod
+    def _merge_fire_into_outcome(
+        outcome: FrontOutcome,
+        fire_data: dict[str, Any],
+        *,
+        beat_id: str,
+    ) -> None:
+        outcome.fired_beats.append(beat_id)
+        outcome.wiki_patches.extend(fire_data.get("wiki_patches") or [])
+        outcome.beat_summaries.extend(fire_data.get("beat_summaries") or [])
+        outcome.situations_add.extend(
+            coerce_fact_list(fire_data.get("situations_add") or [])
+        )
+        outcome.characters_add.extend(fire_data.get("characters_add") or [])
+        for cid, loc in (fire_data.get("characters_nearby") or {}).items():
+            outcome.characters_nearby[cid] = loc
+        for loc_id, roles in (fire_data.get("location_ambient") or {}).items():
+            outcome.location_ambient.setdefault(loc_id, [])
+            outcome.location_ambient[loc_id] = list(
+                dict.fromkeys(outcome.location_ambient[loc_id] + list(roles))
+            )
+        for loc_id, events in (fire_data.get("location_events") or {}).items():
+            outcome.location_events.setdefault(loc_id, []).extend(events)
+        for loc_id, atmosphere in (fire_data.get("location_atmosphere") or {}).items():
+            outcome.location_atmosphere[loc_id] = atmosphere
+        for cid, loc in (fire_data.get("character_locations") or {}).items():
+            outcome.character_locations[cid] = loc
+
     def _fire_collect(
         self,
         state: GameState,
@@ -890,8 +1426,12 @@ class FrontEngine:
         *,
         player_present: bool = False,
         acting_cast: bool = False,
+        pressure_only: bool = False,
     ) -> dict[str, Any]:
-        """Build place facts + nearby cast; acting cast only when requested on-site."""
+        """Build place facts + nearby cast; acting cast only when requested on-site.
+
+        ``pressure_only``: atmosphere/ambient/nearby without closing location_events.
+        """
         bullets = bullets if bullets is not None else scene_canon_to_bullets(beat.scene_canon, limit=3)
         characters_add: list[str] = []
         characters_nearby: dict[str, str] = {}
@@ -902,15 +1442,18 @@ class FrontEngine:
 
         if bullets:
             location_atmosphere[beat.place] = bullets[0][:120]
-            location_events[beat.place] = list(bullets)
+            if not pressure_only:
+                location_events[beat.place] = list(bullets)
         if beat.ambient:
             location_ambient[beat.place] = list(beat.ambient)
+
+        # Symptoms/edge beats skip auto cast_acting on fire/hydrate; dialogue can
+        # still promote via present_join (Pass 1 / pipeline engagement).
+        symptoms_only = beat.raw.get("if_player_present") == "narrate_symptoms_or_edge"
 
         for cast_key in beat.cast_in_world:
             member = definition.cast.get(cast_key)
             if not member or not member.wiki:
-                continue
-            if cast_key in {"ainz", "albedo"} and beat.raw.get("if_player_present") == "narrate_symptoms_or_edge":
                 continue
             place = member.default_location or beat.place
             characters_nearby[member.wiki] = place
@@ -921,7 +1464,7 @@ class FrontEngine:
                 member = definition.cast.get(cast_key)
                 if not member or not member.wiki:
                     continue
-                if cast_key in {"ainz", "albedo"} and beat.raw.get("if_player_present") == "narrate_symptoms_or_edge":
+                if symptoms_only:
                     continue
                 characters_add.append(member.wiki)
                 place = member.default_location or beat.place

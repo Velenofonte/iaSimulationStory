@@ -4,7 +4,7 @@ function apiBase(): string {
   // Dev: path relativo → proxy Vite /api → backend (funziona da PC e cellulare)
   if (import.meta.env.DEV) return "";
   const host = typeof window !== "undefined" ? window.location.hostname : "127.0.0.1";
-  return `http://${host}:8000`;
+  return `http://${host}:8001`;
 }
 
 const API_BASE = apiBase();
@@ -267,11 +267,12 @@ export type ArcTimelineBeat = {
   id: string;
   title: string;
   place: string;
-  status: "done" | "current" | "upcoming" | "skipped";
+  status: "done" | "current" | "upcoming" | "skipped" | "live";
   summary?: string;
   hours_after_previous?: number;
   estimated_day?: number | null;
   due_time?: string | null;
+  pillar?: boolean;
 };
 
 export type ArcTimelineFront = {

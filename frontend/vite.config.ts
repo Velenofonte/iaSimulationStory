@@ -63,9 +63,11 @@ export default defineConfig({
     host: true, // 0.0.0.0 — raggiungibile da cellulare in LAN
     port: 5173,
     proxy: {
-      // Stesso origin della pagina → niente 127.0.0.1 sul telefono
+      // Stesso origin della pagina → niente 127.0.0.1 sul telefono.
+      // Porta 8001: su Windows Cursor puo' occupare 127.0.0.1:8000 (HTTPS)
+      // e rubare il proxy se il backend e' su 8000.
       "/api": {
-        target: "http://127.0.0.1:8000",
+        target: "http://127.0.0.1:8001",
         changeOrigin: true,
       },
     },

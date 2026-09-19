@@ -4,6 +4,7 @@
 - `raw/` sorgenti immutabili dal web
 - `stories/<story_id>/wiki/` seed canone (ingest aggiorna qui; runtime non scrive)
 - `stories/<story_id>/wiki/fronts/` archi narrativi (YAML beat) **specifici dell'ambientazione**
+  - sul beat: `pillar: true` se il **passo** e' obbligatorio per l'arco (qualsiasi mezzo); se manca → arco spezzato / storia nuova. Il motore legge solo il flag.
 - `stories/<story_id>/wiki/overlays/<arc_id>/` titoli/epoca legati all'arco
 - `stories/<story_id>/meta.yaml` meta storia (`genre`, `narrative_style`, start, default_front)
 - `stories/<story_id>/prompts/` regole ingest/tono/episodi opzionali del pack (non nel motore generico)

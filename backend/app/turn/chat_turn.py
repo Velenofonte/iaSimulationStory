@@ -124,6 +124,32 @@ def apply_narration_to_state(state: GameState, narr_result: NarrativeReply) -> N
     )
 
 
+def advance_minutes_capped_to_front(
+    state: GameState,
+    fronts: FrontEngine,
+    bucket: str | None,
+    minutes: int | None,
+    *,
+    player_action: str = "",
+    stance: str | None = None,
+) -> int:
+    """Advance the clock without overshooting a hydratable beat at the player's place.
+
+    When ``cap == 0`` (beat already in window), advances 0 minutes so the caller can
+    still ``resolve_tick`` and fire in the **same** turn. Wait / observation stances
+    use the same cap so a long wait cannot skip past the beat.
+    """
+    del stance  # same cap for all stances; kept for call-site clarity
+    bucket = coerce_time_bucket(bucket, player_action)
+    _, planned = planned_delta_minutes(state, bucket, minutes)
+    cap = fronts.minutes_to_next_hydratable_beat(state)
+    if cap is not None:
+        # min(planned, cap) covers overshoot and the already-due (cap=0) case
+        return advance_by_minutes(state, min(planned, cap))
+    _, minutes_added = advance_from_parts(state, bucket, minutes)
+    return minutes_added
+
+
 def advance_clock_respecting_fronts(
     state: GameState,
     fronts: FrontEngine,
@@ -131,15 +157,16 @@ def advance_clock_respecting_fronts(
     minutes: int | None,
     *,
     player_action: str = "",
+    stance: str | None = None,
 ) -> str:
-    bucket = coerce_time_bucket(bucket, player_action)
-    _, planned = planned_delta_minutes(state, bucket, minutes)
-    cap = fronts.minutes_to_next_hydratable_beat(state)
-    if cap is not None and planned > cap:
-        minutes_added = advance_by_minutes(state, cap)
-    else:
-        _, minutes_added = advance_from_parts(state, bucket, minutes)
-
+    minutes_added = advance_minutes_capped_to_front(
+        state,
+        fronts,
+        bucket,
+        minutes,
+        player_action=player_action,
+        stance=stance,
+    )
     outcome = fronts.resolve_tick(state, minutes_added)
     apply_front_outcome(state, outcome)
     if outcome.wiki_patches:
@@ -154,16 +181,17 @@ def advance_clock_with_outcome(
     minutes: int | None,
     *,
     player_action: str = "",
+    stance: str | None = None,
 ) -> tuple[str, FrontOutcome]:
     """Clock advance that returns FrontOutcome without applying wiki patches."""
-    bucket = coerce_time_bucket(bucket, player_action)
-    _, planned = planned_delta_minutes(state, bucket, minutes)
-    cap = fronts.minutes_to_next_hydratable_beat(state)
-    if cap is not None and planned > cap:
-        minutes_added = advance_by_minutes(state, cap)
-    else:
-        _, minutes_added = advance_from_parts(state, bucket, minutes)
-
+    minutes_added = advance_minutes_capped_to_front(
+        state,
+        fronts,
+        bucket,
+        minutes,
+        player_action=player_action,
+        stance=stance,
+    )
     outcome = fronts.resolve_tick(state, minutes_added)
     apply_front_outcome(state, outcome)
     # Beat entra in prosa via fired_beat_summaries / interrupt_hint del front — niente coda meta.

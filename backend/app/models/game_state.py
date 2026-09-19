@@ -232,6 +232,17 @@ class FrontRuntime(BaseModel):
     started_day: int | None = None
     # Added to beat.due_abs_minutes when start.relative_to = previous_arc_close
     due_offset_minutes: int = 0
+    # Beat due at player place but not yet committed (participation window)
+    live_beat_id: str | None = None
+    live_started_abs: int | None = None
+    # The window stays open only while the fiction keeps feeding it: the reason
+    # the actor is waiting, and the signature of the fact that last renewed it.
+    live_hold_reason: str | None = None
+    live_progress_key: str | None = None
+    # Clear interference with the default means: picks the alt path on commit.
+    live_interference: bool = False
+    # Hostile default/alt means telegraphed but not yet landed (agency).
+    live_means_inflight: bool = False
 
 
 class ChronicleEntry(BaseModel):
@@ -285,12 +296,12 @@ class ArcTimelineBeat(BaseModel):
     id: str
     title: str
     place: str
-    status: Literal["done", "current", "upcoming", "skipped"]
+    status: Literal["done", "current", "upcoming", "skipped", "live"]
     summary: str = ""
     hours_after_previous: float = 0
     estimated_day: int | None = None
     due_time: str | None = None
-
+    pillar: bool = False
 
 class ArcTimelineFront(BaseModel):
     id: str

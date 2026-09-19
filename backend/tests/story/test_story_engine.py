@@ -170,6 +170,8 @@ def test_close_canon_applies_on_close_and_chains(tmp_path: Path):
         player=PlayerState(name="P", location="elsewhere"),
     )
     story.seed_era(state, "test_era", activate_entry=True, fire_start=False)
+    # Off-camera catch-up: leave the beat place so ticks fire instead of opening live.
+    state.player.location = "elsewhere"
     # Jump past both beats of arc_a
     state.day = 1
     state.minutes = 480 + 60

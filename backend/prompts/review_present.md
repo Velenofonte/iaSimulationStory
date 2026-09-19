@@ -24,6 +24,7 @@ SOLO JSON valido `PresentReviewResult` (niente testo fuori):
     "lizzie-bareare": { "where": "bottega", "reason": "tornata al bancone" }
   },
   "front_impacts": [],
+  "beat_commit": null,
   "extra_set": {},
   "extra_remove": [],
   "confidence": "medium"
@@ -73,8 +74,13 @@ Solo chiavi strutturate non previste altrove. Non sovrascrivere campi fissi dell
 
 ### front_impacts
 Solo strato 2: `null` | `distort` | `block` + `intent_id` + `front_id`.
-Esempio: `{"front_id": "carne_arc", "intent_id": "raid_locale", "effect": "distort", "evidence": "..."}`.
+Esempio: `{"front_id": "arc_id", "intent_id": "local_pressure", "effect": "distort", "evidence": "..."}`.
 Non usare per piani di arco globali. Non aggiornare day/minutes/time.
+
+### beat_commit
+Se in chat un beat era **live** sul place del PG e la scena lo ha risolto o piegato: i fatti in chat battono lo stato.
+- `{ "path": "canon"|"alt"|"still_live", "note": "..." }` — `canon`/`alt` chiudono il beat; `still_live` lascia aperta la pressione; `null` se non c'e' finestra live.
+- VIETATO inventare che l'esito sia gia' successo altrove / altro tratto / altro settore mentre il PG e' sul place.
 
 ## Priorita' in conflitto
 

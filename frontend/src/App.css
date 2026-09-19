@@ -1189,6 +1189,11 @@ textarea {
   background: color-mix(in srgb, var(--accent) 8%, var(--bg));
 }
 
+.arc-beat.arc-live {
+  border-color: color-mix(in srgb, #3d8bfd 55%, var(--line));
+  background: color-mix(in srgb, #3d8bfd 10%, var(--bg));
+}
+
 .arc-beat-head {
   display: flex;
   flex-wrap: wrap;
@@ -1217,8 +1222,25 @@ textarea {
   border-color: color-mix(in srgb, var(--accent) 45%, var(--line));
 }
 
+.arc-badge-live {
+  color: color-mix(in srgb, #3d8bfd 90%, var(--text));
+  border-color: color-mix(in srgb, #3d8bfd 45%, var(--line));
+}
+
 .arc-badge-skipped {
   text-decoration: line-through;
+}
+
+.arc-badge-pillar {
+  color: color-mix(in srgb, #b45309 90%, var(--text));
+  border-color: color-mix(in srgb, #b45309 45%, var(--line));
+  background: color-mix(in srgb, #b45309 10%, transparent);
+}
+
+.arc-badge-flexible {
+  color: var(--muted);
+  border-color: var(--line);
+  font-weight: 400;
 }
 
 .arc-beat-meta {
